@@ -1,5 +1,6 @@
 package io.wanjune.minilottery.controller;
 
+import io.wanjune.minilottery.interceptor.RateLimit;
 import io.wanjune.minilottery.mapper.po.LotteryOrder;
 import io.wanjune.minilottery.service.LotteryService;
 import io.wanjune.minilottery.service.vo.DrawResultVO;
@@ -25,8 +26,9 @@ public class LotteryController {
     private final LotteryService lotteryService;
 
     /**
-     * 执行抽奖
+     * 执行抽奖（每用户 60 秒内最多 5 次）
      */
+    @RateLimit(permits = 5, window = 60)
     @GetMapping("/draw")
     public DrawResultVO draw(@RequestParam String userId, @RequestParam String activityId) {
         return lotteryService.draw(userId, activityId);
