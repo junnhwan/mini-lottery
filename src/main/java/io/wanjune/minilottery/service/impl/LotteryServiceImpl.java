@@ -1,5 +1,6 @@
 package io.wanjune.minilottery.service.impl;
 
+import io.wanjune.minilottery.cache.MultiLevelCacheService;
 import io.wanjune.minilottery.lock.StockService;
 import io.wanjune.minilottery.mapper.ActivityMapper;
 import io.wanjune.minilottery.mapper.AwardMapper;
@@ -37,13 +38,14 @@ public class LotteryServiceImpl implements LotteryService {
     private final UserParticipateCountMapper userParticipateCountMapper;
     private final DrawAlgorithm drawAlgorithm;
     private final StockService stockService;
+    private final MultiLevelCacheService cacheService;
 
     @Override
     public DrawResultVO draw(String userId, String activityId) {
         log.info("抽奖请求 userId={}, activityId={}", userId, activityId);
 
-        // 1. 查询活动信息
-        Activity activity = activityMapper.queryByActivityId(activityId);
+        // 1. 查询活动信息（多级缓存）
+        Activity activity = cacheService.getActivity(activityId);
 
         // 2. 校验活动状态
         if (activity == null) {
@@ -72,8 +74,8 @@ public class LotteryServiceImpl implements LotteryService {
         }
         log.info("库存扣减成功");
 
-        // 5. 执行抽奖
-        List<Award> awards = awardMapper.queryByActivityId(activityId);
+        // 5. 执行抽奖（多级缓存）
+        List<Award> awards = cacheService.getAwards(activityId);
         Award award = drawAlgorithm.draw(awards);
         log.info("抽奖结果 awardId={}, awardName={}", award.getAwardId(), award.getAwardName());
 
