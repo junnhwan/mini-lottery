@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="io.wanjune.minilottery.mapper.UserParticipateCountMapper">
+
+    <select id="queryByUserIdAndActivityId" resultType="int">
+        SELECT IFNULL(
+            (SELECT participate_count FROM user_participate_count
+             WHERE user_id = #{userId} AND activity_id = #{activityId}),
+            0)
+    </select>
+
+    <insert id="insertOrUpdate">
+        INSERT INTO user_participate_count (user_id, activity_id, participate_count)
+        VALUES (#{userId}, #{activityId}, 1)
+        ON DUPLICATE KEY UPDATE participate_count = participate_count + 1
+    </insert>
+
+</mapper>
