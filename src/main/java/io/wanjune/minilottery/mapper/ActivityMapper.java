@@ -15,4 +15,7 @@ public interface ActivityMapper {
 
     int deductStock(String activityId);
 
+    /** 回滚库存（超时订单用） */
+    int rollbackStock(String activityId);
+
 }

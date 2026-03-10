@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="io.wanjune.minilottery.mapper.AwardTaskMapper">
+
+    <insert id="insert">
+        INSERT INTO award_task (order_id, user_id, award_id, award_type, status, retry_count)
+        VALUES (#{orderId}, #{userId}, #{awardId}, #{awardType}, #{status}, #{retryCount})
+    </insert>
+
+    <select id="queryByOrderId" resultType="AwardTask">
+        SELECT * FROM award_task WHERE order_id = #{orderId}
+    </select>
+
+    <update id="updateStatus">
+        UPDATE award_task SET status = #{status} WHERE order_id = #{orderId}
+    </update>
+
+    <update id="incrementRetryCount">
+        UPDATE award_task SET retry_count = retry_count + 1 WHERE order_id = #{orderId}
+    </update>
+
+</mapper>

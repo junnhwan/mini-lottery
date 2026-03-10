@@ -17,4 +17,10 @@ public interface LotteryOrderMapper {
 
     List<LotteryOrder> queryByUserIdAndActivityId(@Param("userId")String userId, @Param("activityId")String activityId);
 
+    /** 根据订单号查询 */
+    LotteryOrder queryByOrderId(@Param("orderId") String orderId);
+
+    /** 更新订单状态 */
+    int updateStatus(@Param("orderId") String orderId, @Param("status") int status);
+
 }

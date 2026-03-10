@@ -14,4 +14,10 @@
           AND remain_stock > 0
     </update>
 
+    <update id="rollbackStock">
+        UPDATE activity
+        SET remain_stock = remain_stock + 1
+        WHERE activity_id = #{activityId}
+    </update>
+
 </mapper>

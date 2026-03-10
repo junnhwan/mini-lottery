@@ -15,4 +15,12 @@
         ORDER BY create_time DESC
     </select>
 
+    <select id="queryByOrderId" resultType="LotteryOrder">
+        SELECT * FROM lottery_order WHERE order_id = #{orderId}
+    </select>
+
+    <update id="updateStatus">
+        UPDATE lottery_order SET status = #{status} WHERE order_id = #{orderId}
+    </update>
+
 </mapper>
