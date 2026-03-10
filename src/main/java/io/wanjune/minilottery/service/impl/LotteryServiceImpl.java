@@ -76,27 +76,30 @@ public class LotteryServiceImpl implements LotteryService {
         log.info("抽奖结果 awardId={}, awardName={}", award.getAwardId(), award.getAwardName());
 
         // 6. 写入抽奖订单
-        LotteryOrder order = new LotteryOrder();
-        order.setOrderId(UUID.randomUUID().toString().replace("-", ""));
-        order.setUserId(userId);
-        order.setActivityId(activityId);
-        order.setAwardId(award.getAwardId());
-        order.setAwardName(award.getAwardName());
-        order.setStatus(1);
+        LotteryOrder order = LotteryOrder.builder()
+                .orderId(UUID.randomUUID().toString().replace("-", ""))
+                .userId(userId)
+                .activityId(activityId)
+                .awardId(award.getAwardId())
+                .awardName(award.getAwardName())
+                .status(1)
+                .build();
         lotteryOrderMapper.insert(order);
         log.info("订单写入成功 orderId={}", order.getOrderId());
 
         // 7. 更新参与次数
-        UserParticipateCount participateCount = new UserParticipateCount();
-        participateCount.setUserId(userId);
-        participateCount.setActivityId(activityId);
+        UserParticipateCount participateCount = UserParticipateCount.builder()
+                .userId(userId)
+                .activityId(activityId)
+                .build();
         userParticipateCountMapper.insertOrUpdate(participateCount);
 
         // 8. 组装返回结果
-        DrawResultVO result = new DrawResultVO();
-        result.setAwardId(award.getAwardId());
-        result.setAwardName(award.getAwardName());
-        result.setAwardType(award.getAwardType());
+        DrawResultVO result = DrawResultVO.builder()
+                .awardId(award.getAwardId())
+                .awardName(award.getAwardName())
+                .awardType(award.getAwardType())
+                .build();
         log.info("抽奖完成 userId={}, result={}", userId, result);
         return result;
     }

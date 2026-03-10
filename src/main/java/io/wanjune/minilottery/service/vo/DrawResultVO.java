@@ -1,6 +1,9 @@
 package io.wanjune.minilottery.service.vo;
 
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 /**
  * 抽奖结果
@@ -9,6 +12,9 @@ import lombok.Data;
  * @since 2026/3/10 19:25
  */
 @Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class DrawResultVO {
     /** 奖品ID */
     private String awardId;
