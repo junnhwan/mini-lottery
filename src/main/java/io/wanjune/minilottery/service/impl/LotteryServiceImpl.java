@@ -1,5 +1,6 @@
 package io.wanjune.minilottery.service.impl;
 
+import io.wanjune.minilottery.lock.StockService;
 import io.wanjune.minilottery.mapper.ActivityMapper;
 import io.wanjune.minilottery.mapper.AwardMapper;
 import io.wanjune.minilottery.mapper.LotteryOrderMapper;
@@ -35,6 +36,7 @@ public class LotteryServiceImpl implements LotteryService {
     private final LotteryOrderMapper lotteryOrderMapper;
     private final UserParticipateCountMapper userParticipateCountMapper;
     private final DrawAlgorithm drawAlgorithm;
+    private final StockService stockService;
 
     @Override
     public DrawResultVO draw(String userId, String activityId) {
@@ -63,10 +65,10 @@ public class LotteryServiceImpl implements LotteryService {
         }
         log.info("用户资格校验通过 已参与{}次, 上限{}次", count, activity.getMaxPerUser());
 
-        // 4. 扣减库存
-        int affected = activityMapper.deductStock(activityId);
-        if (affected <= 0) {
-            throw new RuntimeException("库存不足");
+        // 4. 分布式锁扣减库存
+        boolean success = stockService.deductStock(activityId);
+        if (!success) {
+            throw new RuntimeException("库存不足或系统繁忙");
         }
         log.info("库存扣减成功");
 
