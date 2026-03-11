@@ -1,6 +1,7 @@
 package io.wanjune.minilottery.service.impl;
 
 import io.wanjune.minilottery.cache.MultiLevelCacheService;
+import io.wanjune.minilottery.common.BusinessException;
 import io.wanjune.minilottery.lock.StockService;
 import io.wanjune.minilottery.mapper.ActivityMapper;
 import io.wanjune.minilottery.mapper.AwardMapper;
@@ -19,6 +20,7 @@ import io.wanjune.minilottery.service.vo.DrawResultVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -46,6 +48,7 @@ public class LotteryServiceImpl implements LotteryService {
     private final MQProducer mqProducer;
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public DrawResultVO draw(String userId, String activityId) {
         log.info("抽奖请求 userId={}, activityId={}", userId, activityId);
 
@@ -54,28 +57,28 @@ public class LotteryServiceImpl implements LotteryService {
 
         // 2. 校验活动状态
         if (activity == null) {
-            throw new RuntimeException("活动不存在");
+            throw new BusinessException(1001, "活动不存在");
         }
         if (activity.getStatus() != 1) {
-            throw new RuntimeException("活动未开始或已结束");
+            throw new BusinessException(1002, "活动未开始或已结束");
         }
         LocalDateTime now = LocalDateTime.now();
         if (now.isBefore(activity.getBeginTime()) || now.isAfter(activity.getEndTime())) {
-            throw new RuntimeException("活动不在有效期");
+            throw new BusinessException(1003, "活动不在有效期");
         }
         log.info("活动校验通过 activity={}, remainStock={}", activity.getActivityName(), activity.getRemainStock());
 
         // 3. 校验用户参与资格
         int count = userParticipateCountMapper.queryByUserIdAndActivityId(userId, activityId);
         if (count >= activity.getMaxPerUser()) {
-            throw new RuntimeException("已达最大参与次数");
+            throw new BusinessException(1004, "已达最大参与次数");
         }
         log.info("用户资格校验通过 已参与{}次, 上限{}次", count, activity.getMaxPerUser());
 
         // 4. 分布式锁扣减库存
         boolean success = stockService.deductStock(activityId);
         if (!success) {
-            throw new RuntimeException("库存不足或系统繁忙");
+            throw new BusinessException(1005, "库存不足或系统繁忙");
         }
         log.info("库存扣减成功");
 

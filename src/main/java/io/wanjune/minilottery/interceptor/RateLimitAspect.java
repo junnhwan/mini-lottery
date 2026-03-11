@@ -1,5 +1,6 @@
 package io.wanjune.minilottery.interceptor;
 
+import io.wanjune.minilottery.common.BusinessException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -87,7 +88,7 @@ public class RateLimitAspect {
         if (count != null && count >= permits) {
             // --- 4. 超限：拒绝请求 ---
             log.warn("接口限流 key={}, 当前请求数={}, 上限={}", key, count, permits);
-            throw new RuntimeException("请求过于频繁，请稍后再试");
+            throw new BusinessException(1006, "请求过于频繁，请稍后再试");
         }
 
         // --- 5. 未超限：记录本次请求并放行 ---

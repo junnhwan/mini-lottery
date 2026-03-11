@@ -4,6 +4,7 @@ import io.wanjune.minilottery.mapper.po.Award;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * 抽奖算法
@@ -25,7 +26,7 @@ public class DrawAlgorithm {
      * @return 命中的奖品
      */
     public Award draw(List<Award> awards) {
-        double random = Math.random();
+        double random = ThreadLocalRandom.current().nextDouble();
         double cumulative = 0;
         for (Award award : awards) {
             cumulative += award.getAwardRate().doubleValue();
