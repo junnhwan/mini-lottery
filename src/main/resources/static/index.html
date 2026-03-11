@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini-Lottery 迷你抽奖</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: #f5f0eb;
+            color: #333;
+            min-height: 100vh;
+        }
+
+        /* ====== Header ====== */
+        .header {
+            background: linear-gradient(135deg, #c0392b 0%, #e74c3c 50%, #d4380d 100%);
+            color: #fff;
+            text-align: center;
+            padding: 32px 16px;
+            box-shadow: 0 4px 20px rgba(192, 57, 43, 0.3);
+        }
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: 2px;
+        }
+        .header p {
+            margin-top: 8px;
+            font-size: 14px;
+            opacity: 0.85;
+        }
+
+        /* ====== Container ====== */
+        .container {
+            max-width: 520px;
+            margin: 0 auto;
+            padding: 24px 16px;
+        }
+
+        /* ====== Card ====== */
+        .card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+        }
+        .card-title {
+            font-size: 17px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            padding-left: 12px;
+            border-left: 3px solid #e74c3c;
+        }
+
+        /* ====== Form ====== */
+        .form-group {
+            margin-bottom: 16px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 13px;
+            color: #888;
+            margin-bottom: 6px;
+        }
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            height: 42px;
+            padding: 0 12px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .form-group input:focus,
+        .form-group select:focus {
+            border-color: #e74c3c;
+        }
+
+        /* ====== Draw Button ====== */
+        .btn-draw {
+            width: 100%;
+            height: 48px;
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: 2px;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.15s;
+            margin-top: 8px;
+        }
+        .btn-draw:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(231, 76, 60, 0.35);
+        }
+        .btn-draw:active {
+            transform: translateY(0);
+        }
+        .btn-draw:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* ====== Result ====== */
+        .result {
+            display: none;
+            margin-top: 20px;
+            text-align: center;
+            padding: 20px;
+            border-radius: 8px;
+            animation: fadeIn 0.4s ease;
+        }
+        .result.success {
+            display: block;
+            background: linear-gradient(135deg, #fff9f0, #fff2e8);
+            border: 1px solid #ffd8a8;
+        }
+        .result.error {
+            display: block;
+            background: #fef0ef;
+            border: 1px solid #fcc;
+        }
+        .result .award-name {
+            font-size: 22px;
+            font-weight: 700;
+            color: #d4380d;
+            margin: 8px 0;
+        }
+        .result .award-type {
+            font-size: 13px;
+            color: #999;
+        }
+        .result .error-msg {
+            font-size: 15px;
+            color: #e74c3c;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ====== Spinning animation ====== */
+        .spinning .btn-draw {
+            animation: pulse 0.6s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        /* ====== Records Table ====== */
+        .records-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .records-table th {
+            background: #fafafa;
+            color: #888;
+            font-weight: 500;
+            padding: 10px 8px;
+            text-align: left;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .records-table td {
+            padding: 10px 8px;
+            border-bottom: 1px solid #f5f5f5;
+        }
+        .records-table tr:hover td {
+            background: #fffaf5;
+        }
+
+        /* Status badges */
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .status-0 { background: #fff7e6; color: #d48806; }
+        .status-1 { background: #f6ffed; color: #389e0d; }
+        .status-2 { background: #fff1f0; color: #cf1322; }
+
+        .empty-tip {
+            text-align: center;
+            color: #bbb;
+            padding: 32px 0;
+            font-size: 14px;
+        }
+
+        /* ====== Footer ====== */
+        .footer {
+            text-align: center;
+            padding: 24px;
+            color: #ccc;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>Mini-Lottery</h1>
+    <p>迷你营销抽奖平台</p>
+</div>
+
+<div class="container">
+    <!-- 抽奖卡片 -->
+    <div class="card" id="drawCard">
+        <div class="card-title">参与抽奖</div>
+        <div class="form-group">
+            <label>用户 ID</label>
+            <input type="text" id="userId" value="user001" placeholder="请输入用户ID">
+        </div>
+        <div class="form-group">
+            <label>选择活动</label>
+            <select id="activityId">
+                <option value="A20260310001">日常活动（每人限 3 次）</option>
+                <option value="A20260310002" selected>压测活动（不限次数）</option>
+                <option value="A20260310003">已结束活动</option>
+            </select>
+        </div>
+        <button class="btn-draw" id="drawBtn" onclick="doDraw()">开 始 抽 奖</button>
+
+        <div class="result" id="result"></div>
+    </div>
+
+    <!-- 抽奖记录 -->
+    <div class="card">
+        <div class="card-title">抽奖记录</div>
+        <button class="btn-draw" style="background:linear-gradient(135deg,#faad14,#d48806);margin-top:0;margin-bottom:16px;height:38px;font-size:14px;" onclick="loadRecords()">
+            查询记录
+        </button>
+        <div id="recordsBody">
+            <div class="empty-tip">点击上方按钮查询</div>
+        </div>
+    </div>
+</div>
+
+<div class="footer">Mini-Lottery &copy; 2026 | Spring Boot + Redis + RabbitMQ</div>
+
+<script>
+    const BASE = '';  // 同源部署，无需前缀
+
+    // 格式化时间：兼容 Jackson 数组格式 [2026,3,11,8,59,1] 和字符串格式 "2026-03-11T08:59:01"
+    function formatTime(t) {
+        if (!t) return '-';
+        if (typeof t === 'string') return t.replace('T', ' ').substring(0, 19);
+        if (Array.isArray(t)) {
+            const [y, m, d, h = 0, min = 0, s = 0] = t;
+            return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')} ${String(h).padStart(2,'0')}:${String(min).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+        }
+        return String(t);
+    }
+
+    async function doDraw() {
+        const userId = document.getElementById('userId').value.trim();
+        const activityId = document.getElementById('activityId').value;
+        const btn = document.getElementById('drawBtn');
+        const resultDiv = document.getElementById('result');
+
+        if (!userId) { alert('请输入用户ID'); return; }
+
+        // 按钮加载状态
+        btn.disabled = true;
+        btn.textContent = '抽 奖 中 ...';
+        document.getElementById('drawCard').classList.add('spinning');
+        resultDiv.className = 'result';
+
+        try {
+            const resp = await fetch(`${BASE}/api/lottery/draw?userId=${userId}&activityId=${activityId}`, {
+                method: 'POST'
+            });
+            const data = await resp.json();
+
+            if (data.code === 0) {
+                const typeMap = { 1: '优惠券', 2: '实物奖品', 3: '谢谢参与' };
+                resultDiv.innerHTML = `
+                    <div class="award-type">${typeMap[data.data.awardType] || '奖品'}</div>
+                    <div class="award-name">${data.data.awardName}</div>
+                `;
+                resultDiv.className = 'result success';
+            } else {
+                resultDiv.innerHTML = `<div class="error-msg">${data.message}</div>`;
+                resultDiv.className = 'result error';
+            }
+        } catch (e) {
+            resultDiv.innerHTML = `<div class="error-msg">网络异常，请检查服务是否启动</div>`;
+            resultDiv.className = 'result error';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '开 始 抽 奖';
+            document.getElementById('drawCard').classList.remove('spinning');
+        }
+    }
+
+    async function loadRecords() {
+        const userId = document.getElementById('userId').value.trim();
+        const activityId = document.getElementById('activityId').value;
+        const body = document.getElementById('recordsBody');
+
+        if (!userId) { alert('请输入用户ID'); return; }
+
+        try {
+            const resp = await fetch(`${BASE}/api/lottery/records?userId=${userId}&activityId=${activityId}`);
+            const data = await resp.json();
+
+            if (data.code !== 0 || !data.data || data.data.length === 0) {
+                body.innerHTML = '<div class="empty-tip">暂无记录</div>';
+                return;
+            }
+
+            const statusText = { 0: '待处理', 1: '已完成', 2: '已超时' };
+            const rows = data.data.map(r => `
+                <tr>
+                    <td>${r.awardName}</td>
+                    <td><span class="status-badge status-${r.status}">${statusText[r.status] || r.status}</span></td>
+                    <td>${formatTime(r.createTime)}</td>
+                </tr>
+            `).join('');
+
+            body.innerHTML = `
+                <table class="records-table">
+                    <thead><tr><th>奖品</th><th>状态</th><th>时间</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            `;
+        } catch (e) {
+            body.innerHTML = '<div class="empty-tip">查询失败，请检查服务</div>';
+        }
+    }
+</script>
+</body>
+</html>
