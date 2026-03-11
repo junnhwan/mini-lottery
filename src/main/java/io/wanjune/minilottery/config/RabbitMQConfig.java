@@ -60,8 +60,8 @@ public class RabbitMQConfig {
     /** 死信路由键 */
     public static final String ORDER_TIMEOUT_ROUTING_KEY = "order.timeout.routing";
 
-    /** 订单超时时间：测试用 30 秒，正式改回 10 * 60 * 1000 */
-    public static final int ORDER_TTL = 30 * 1000;
+    /** 订单超时时间：10 分钟（毫秒） */
+    public static final int ORDER_TTL = 10 * 60 * 1000;
 
     // ======================== 发奖队列配置 ========================
 
