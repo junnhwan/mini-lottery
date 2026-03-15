@@ -83,15 +83,23 @@ public class StrategyArmory {
      * - 装配涉及 DB 查询 + Redis 写入，有一定耗时
      * - 放在启动时完成，避免用户第一次抽奖时的冷启动延迟
      * - 分布式环境下，每个实例都会装配，但 Redis 是共享的，互不影响
+     *
+     * 注意：用 try-catch 包裹，装配失败不阻塞应用启动
+     * 失败的活动可以后续通过手动调用 armory(activityId) 重新装配
      */
     @PostConstruct
     public void init() {
-        log.info("========== 开始装配抽奖策略 ==========");
-        List<Activity> activeActivities = activityMapper.queryByStatus(ActivityStatus.ACTIVE.getCode());
-        for (Activity activity : activeActivities) {
-            armory(activity.getActivityId());
+        try {
+            log.info("========== 开始装配抽奖策略 ==========");
+            List<Activity> activeActivities = activityMapper.queryByStatus(ActivityStatus.ACTIVE.getCode());
+            for (Activity activity : activeActivities) {
+                armory(activity.getActivityId());
+            }
+            log.info("========== 抽奖策略装配完成，共装配 {} 个活动 ==========", activeActivities.size());
+        } catch (Exception e) {
+            // 装配失败不阻塞应用启动，避免 DB/Redis 暂时不可用导致整个应用起不来
+            log.warn("========== 抽奖策略装配失败（不影响启动，可手动重新装配）==========", e);
         }
-        log.info("========== 抽奖策略装配完成，共装配 {} 个活动 ==========", activeActivities.size());
     }
 
     /**

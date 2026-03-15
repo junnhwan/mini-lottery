@@ -4,7 +4,8 @@
       "Bash(mvn compile -q)",
       "Bash(mvn compile)",
       "Bash(mvn clean compile)",
-      "Bash(mvn test-compile)"
+      "Bash(mvn test-compile)",
+      "Bash(mvn clean test-compile)"
     ]
   }
 }
