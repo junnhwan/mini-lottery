@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
+import java.time.LocalDateTime;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -58,7 +59,7 @@ public class ApiTest {
             executor.submit(() -> {
                 try {
                     startLatch.await();  // 等待发令枪
-                    boolean result = stockService.deductStock(activityId);
+                    boolean result = stockService.deductStock(activityId, LocalDateTime.now().plusDays(1));
                     if (result) {
                         successCount.incrementAndGet();
                     } else {
