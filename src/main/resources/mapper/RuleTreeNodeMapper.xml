@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="io.wanjune.minilottery.mapper.RuleTreeNodeMapper">
+
+    <select id="queryByTreeId" resultType="RuleTreeNode">
+        SELECT * FROM rule_tree_node WHERE tree_id = #{treeId}
+    </select>
+
+</mapper>

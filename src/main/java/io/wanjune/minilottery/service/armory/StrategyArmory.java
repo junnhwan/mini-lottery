@@ -4,17 +4,23 @@ import io.wanjune.minilottery.common.enums.ActivityStatus;
 import io.wanjune.minilottery.lock.StockService;
 import io.wanjune.minilottery.mapper.ActivityMapper;
 import io.wanjune.minilottery.mapper.AwardMapper;
+import io.wanjune.minilottery.mapper.StrategyRuleMapper;
 import io.wanjune.minilottery.mapper.po.Activity;
 import io.wanjune.minilottery.mapper.po.Award;
+import io.wanjune.minilottery.mapper.po.StrategyRule;
 import io.wanjune.minilottery.service.algorithm.IDrawAlgorithm;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 策略装配服务（兵工厂）
@@ -46,7 +52,9 @@ public class StrategyArmory {
 
     private final AwardMapper awardMapper;
     private final ActivityMapper activityMapper;
+    private final StrategyRuleMapper strategyRuleMapper;
     private final RedisTemplate<String, Object> redisTemplate;
+    private final RedissonClient redissonClient;
     private final StockService stockService;
 
     /**
@@ -70,12 +78,16 @@ public class StrategyArmory {
 
     public StrategyArmory(AwardMapper awardMapper,
                           ActivityMapper activityMapper,
+                          StrategyRuleMapper strategyRuleMapper,
                           RedisTemplate<String, Object> redisTemplate,
+                          RedissonClient redissonClient,
                           StockService stockService,
                           Map<String, IDrawAlgorithm> algorithmMap) {
         this.awardMapper = awardMapper;
         this.activityMapper = activityMapper;
+        this.strategyRuleMapper = strategyRuleMapper;
         this.redisTemplate = redisTemplate;
+        this.redissonClient = redissonClient;
         this.stockService = stockService;
         this.algorithmMap = algorithmMap;
     }
@@ -161,20 +173,91 @@ public class StrategyArmory {
             stockService.preheatStock(activityId, activity.getRemainStock());
         }
 
+        // 7. 权重子奖池装配（Phase 3 新增）
+        //    读取 strategy_rule 的 weight 配置，为每个阈值组单独构建概率表
+        //    例：配置 "2:R001,R002,R003,R004 3:R001,R002,R004"
+        //    → 装配 key=A20260310001_2 的子奖池（只包含 R001,R002,R003,R004）
+        //    → 装配 key=A20260310001_3 的子奖池（只包含 R001,R002,R004）
+        armoryWeightSubPools(activityId, awards);
+
+        // 8. per-award 库存预热（Phase 3 新增）
+        //    规则树的 RuleStockLogicTreeNode 需要按奖品级别 DECR 扣减
+        //    预热 key: award_stock:{activityId}_{awardId}
+        for (Award award : awards) {
+            if (award.getStock() != null && award.getStock() > 0) {
+                String awardStockKey = "award_stock:" + activityId + "_" + award.getAwardId();
+                if (!redissonClient.getAtomicLong(awardStockKey).isExists()) {
+                    redissonClient.getAtomicLong(awardStockKey).set(award.getStock());
+                    log.info("per-award 库存预热 awardId={}, stock={}", award.getAwardId(), award.getStock());
+                }
+            }
+        }
+
         log.info("活动装配完成 activityId={}, algorithm={}", activityId, algorithmName);
+    }
+
+    /**
+     * 装配权重子奖池（Phase 3 新增）
+     *
+     * 从 strategy_rule 读取 rule_weight 配置，按阈值组拆分奖品，
+     * 为每组单独计算概率、装配 Redis 查找表
+     *
+     * @param activityId 活动ID
+     * @param allAwards  该活动的所有奖品
+     */
+    private void armoryWeightSubPools(String activityId, List<Award> allAwards) {
+        StrategyRule rule = strategyRuleMapper.queryByActivityIdAndRuleModel(activityId, "rule_weight");
+        if (rule == null || rule.getRuleValue() == null) {
+            return;
+        }
+
+        // 解析 "2:R001,R002,R003,R004 3:R001,R002,R004"
+        String[] groups = rule.getRuleValue().split("\\s+");
+        for (String group : groups) {
+            String[] parts = group.split(":");
+            if (parts.length != 2) continue;
+
+            String threshold = parts[0];
+            Set<String> allowedAwardIds = Arrays.stream(parts[1].split(","))
+                    .map(String::trim)
+                    .collect(Collectors.toSet());
+
+            // 过滤出该阈值组的奖品
+            List<Award> filteredAwards = allAwards.stream()
+                    .filter(a -> allowedAwardIds.contains(a.getAwardId()))
+                    .toList();
+
+            if (filteredAwards.isEmpty()) {
+                log.warn("权重组无有效奖品，跳过 threshold={}", threshold);
+                continue;
+            }
+
+            // 用 activityId_threshold 作为子奖池 key
+            String weightKey = activityId + "_" + threshold;
+            int subRateRange = computeRateRange(filteredAwards);
+
+            // 选择算法并装配子奖池
+            String subAlgorithmName = subRateRange <= ALGORITHM_THRESHOLD ? "o1Algorithm" : "oLogNAlgorithm";
+            IDrawAlgorithm subAlgorithm = algorithmMap.get(subAlgorithmName);
+            subAlgorithm.armory(weightKey, filteredAwards, subRateRange);
+            redisTemplate.opsForValue().set(ALGORITHM_KEY_PREFIX + weightKey, subAlgorithmName);
+
+            log.info("权重子奖池装配完成 weightKey={}, awardCount={}, algorithm={}",
+                    weightKey, filteredAwards.size(), subAlgorithmName);
+        }
     }
 
     /**
      * 执行抽奖 — 从 Redis 概率查找表中获取一个随机奖品ID
      *
-     * @param activityId 活动ID
+     * @param key 存储的 key 标识（activityId 或 activityId_threshold 权重子奖池）
      * @return 命中的奖品ID
      */
-    public String draw(String activityId) {
-        // 1. 从 Redis 查找该活动使用的算法类型
-        Object algorithmName = redisTemplate.opsForValue().get(ALGORITHM_KEY_PREFIX + activityId);
+    public String draw(String key) {
+        // 1. 从 Redis 查找该 key 使用的算法类型
+        Object algorithmName = redisTemplate.opsForValue().get(ALGORITHM_KEY_PREFIX + key);
         if (algorithmName == null) {
-            throw new RuntimeException("活动未装配策略，请先调用 armory. activityId=" + activityId);
+            throw new RuntimeException("策略未装配，请先调用 armory. key=" + key);
         }
 
         // 2. 根据算法名称获取对应的算法实现（Spring Bean）
@@ -184,7 +267,7 @@ public class StrategyArmory {
         }
 
         // 3. 调用算法的 dispatch 方法（O(1) 或 O(log n)）
-        return algorithm.dispatch(activityId);
+        return algorithm.dispatch(key);
     }
 
     /**

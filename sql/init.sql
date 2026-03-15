@@ -109,3 +109,100 @@ INSERT INTO award (award_id, activity_id, award_name, award_type, award_rate, st
 -- 活动3：已结束活动（status=2，测试校验逻辑）
 INSERT INTO activity (activity_id, activity_name, status, total_stock, remain_stock, max_per_user, begin_time, end_time)
 VALUES ('A20260310003', '已结束活动', 2, 100, 0, 1, '2026-01-01 00:00:00', '2026-02-01 00:00:00');
+
+-- ============================================
+-- Phase 3: 责任链 + 规则树（新增表 + 字段）
+-- ============================================
+
+-- 现有表加字段
+ALTER TABLE activity ADD COLUMN rule_models VARCHAR(256) DEFAULT NULL COMMENT '责任链规则列表，逗号分隔，如 rule_blacklist,rule_weight';
+ALTER TABLE award ADD COLUMN rule_models VARCHAR(256) DEFAULT NULL COMMENT '关联的规则树 ID，如 tree_lock_1';
+
+-- 6. 策略规则表（责任链节点的配置值）
+DROP TABLE IF EXISTS strategy_rule;
+CREATE TABLE strategy_rule (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    activity_id VARCHAR(32) NOT NULL COMMENT '活动ID',
+    rule_model VARCHAR(32) NOT NULL COMMENT '规则模型：rule_blacklist / rule_weight',
+    rule_value TEXT NOT NULL COMMENT '规则值（格式因 rule_model 而异）',
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_activity_rule (activity_id, rule_model)
+) ENGINE=InnoDB COMMENT='策略规则表（责任链配置）';
+
+-- 7. 规则树定义表
+DROP TABLE IF EXISTS rule_tree;
+CREATE TABLE rule_tree (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    tree_id VARCHAR(32) NOT NULL COMMENT '规则树ID',
+    tree_name VARCHAR(64) NOT NULL COMMENT '规则树名称',
+    tree_desc VARCHAR(128) DEFAULT NULL COMMENT '规则树描述',
+    tree_root_rule_key VARCHAR(32) NOT NULL COMMENT '根节点 rule_key',
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE INDEX uk_tree_id (tree_id)
+) ENGINE=InnoDB COMMENT='规则树定义表';
+
+-- 8. 规则树节点表
+DROP TABLE IF EXISTS rule_tree_node;
+CREATE TABLE rule_tree_node (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    tree_id VARCHAR(32) NOT NULL COMMENT '规则树ID',
+    rule_key VARCHAR(32) NOT NULL COMMENT '节点标识：rule_lock / rule_stock / rule_luck_award',
+    rule_desc VARCHAR(64) DEFAULT NULL COMMENT '节点描述',
+    rule_value VARCHAR(256) DEFAULT NULL COMMENT '节点配置值（lock阈值 / 兜底奖品ID等）',
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tree_id (tree_id)
+) ENGINE=InnoDB COMMENT='规则树节点表';
+
+-- 9. 规则树节点连线表
+DROP TABLE IF EXISTS rule_tree_node_line;
+CREATE TABLE rule_tree_node_line (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    tree_id VARCHAR(32) NOT NULL COMMENT '规则树ID',
+    rule_node_from VARCHAR(32) NOT NULL COMMENT '起始节点 rule_key',
+    rule_node_to VARCHAR(32) NOT NULL COMMENT '目标节点 rule_key',
+    rule_limit_type VARCHAR(8) NOT NULL DEFAULT 'EQUAL' COMMENT '限定类型：EQUAL',
+    rule_limit_value VARCHAR(16) NOT NULL COMMENT '限定值：ALLOW / TAKE_OVER',
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tree_id (tree_id)
+) ENGINE=InnoDB COMMENT='规则树节点连线表';
+
+-- ============================================
+-- Phase 3 测试数据
+-- ============================================
+
+-- 活动1 添加责任链配置
+UPDATE activity SET rule_models = 'rule_blacklist,rule_weight' WHERE activity_id = 'A20260310001';
+
+-- 活动1 的一等奖和二等奖需要规则树校验（lock + stock）
+UPDATE award SET rule_models = 'tree_lock_1' WHERE award_id = 'R001';
+UPDATE award SET rule_models = 'tree_lock_1' WHERE award_id = 'R002';
+
+-- 策略规则：黑名单配置（格式：兜底奖品ID:黑名单用户列表）
+INSERT INTO strategy_rule (activity_id, rule_model, rule_value)
+VALUES ('A20260310001', 'rule_blacklist', 'R004:user_black_001,user_black_002');
+
+-- 策略规则：权重配置（格式：参与次数阈值:可选奖品ID列表，空格分隔多组）
+-- 参与 >= 2 次：可以从所有奖品中抽
+-- 参与 >= 3 次：只能抽一等奖、二等奖、谢谢参与（去掉三等奖，集中概率给高奖）
+INSERT INTO strategy_rule (activity_id, rule_model, rule_value)
+VALUES ('A20260310001', 'rule_weight', '2:R001,R002,R003,R004 3:R001,R002,R004');
+
+-- 规则树定义：tree_lock_1（锁 → 库存 → 兜底）
+INSERT INTO rule_tree (tree_id, tree_name, tree_desc, tree_root_rule_key)
+VALUES ('tree_lock_1', '抽奖次数锁+库存校验', '先校验抽奖次数是否达标，再校验奖品库存，不满足则走兜底', 'rule_lock');
+
+-- 规则树节点
+INSERT INTO rule_tree_node (tree_id, rule_key, rule_desc, rule_value) VALUES
+('tree_lock_1', 'rule_lock',       '抽奖次数锁：参与次数 >= 阈值才放行', '2'),
+('tree_lock_1', 'rule_stock',      '奖品库存校验：DECR 扣减 per-award 库存', NULL),
+('tree_lock_1', 'rule_luck_award', '兜底奖品：谢谢参与', 'R004');
+
+-- 规则树连线
+-- rule_lock → ALLOW → rule_stock（次数够，继续查库存）
+-- rule_lock → TAKE_OVER → rule_luck_award（次数不够，直接兜底）
+-- rule_stock → TAKE_OVER → null（库存扣成功，终止，确认发奖）
+-- rule_stock → ALLOW → rule_luck_award（库存不足，走兜底）
+INSERT INTO rule_tree_node_line (tree_id, rule_node_from, rule_node_to, rule_limit_type, rule_limit_value) VALUES
+('tree_lock_1', 'rule_lock',  'rule_stock',      'EQUAL', 'ALLOW'),
+('tree_lock_1', 'rule_lock',  'rule_luck_award', 'EQUAL', 'TAKE_OVER'),
+('tree_lock_1', 'rule_stock', 'rule_luck_award', 'EQUAL', 'ALLOW');

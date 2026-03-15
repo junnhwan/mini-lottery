@@ -19,6 +19,8 @@ import io.wanjune.minilottery.mapper.po.UserParticipateCount;
 import io.wanjune.minilottery.mq.producer.MQProducer;
 import io.wanjune.minilottery.service.LotteryService;
 import io.wanjune.minilottery.service.armory.StrategyArmory;
+import io.wanjune.minilottery.service.rule.chain.ChainFactory;
+import io.wanjune.minilottery.service.rule.tree.TreeFactory;
 import io.wanjune.minilottery.service.vo.DrawResultVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -51,6 +53,8 @@ public class LotteryServiceImpl implements LotteryService {
     private final AwardTaskMapper awardTaskMapper;
     private final MQProducer mqProducer;
     private final StrategyArmory strategyArmory;
+    private final ChainFactory chainFactory;
+    private final TreeFactory treeFactory;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -89,17 +93,41 @@ public class LotteryServiceImpl implements LotteryService {
         }
         log.info("库存扣减成功");
 
-        // 5. 执行抽奖（O(1) 或 O(log n) 算法，从 Redis 概率查找表中获取）
-        //    改造前：从缓存取奖品列表 → 遍历累加概率匹配（O(n)）
-        //    改造后：直接从 Redis Hash 中 O(1) 查找（概率表在启动时已装配）
-        String awardId = strategyArmory.draw(activityId);
-        // 通过 awardId 查找完整的奖品信息（用于写订单）
+        // 5. 责任链前置过滤（Phase 3 改造）
+        //    改造前：直接调 strategyArmory.draw(activityId) → O(1) 随机抽奖
+        //    改造后：BlackList → Weight → Default 链式过滤
+        //    黑名单命中 → 直接返回兜底奖品，跳过规则树
+        //    权重命中 → 从权重子奖池抽奖
+        //    默认 → 从全量奖池抽奖
+        ChainFactory.ChainResult chainResult = chainFactory.openLogicChain(activityId).logic(userId, activityId);
+        String awardId = chainResult.awardId();
+        log.info("责任链结果 logicModel={}, awardId={}", chainResult.logicModel(), awardId);
+
+        // 6. 规则树后置决策（Phase 3 改造）
+        //    仅对 Weight/Default 结果执行（黑名单已经确定了奖品，不需要再走树）
+        //    树流程：rule_lock（次数锁）→ rule_stock（奖品库存）→ rule_luck_award（兜底）
+        if (chainResult.logicModel() != ChainFactory.LogicModel.RULE_BLACKLIST) {
+            // 查询该奖品是否配置了规则树
+            List<Award> awards = cacheService.getAwards(activityId);
+            Award tempAward = awards.stream()
+                    .filter(a -> a.getAwardId().equals(awardId))
+                    .findFirst()
+                    .orElse(null);
+            if (tempAward != null && tempAward.getRuleModels() != null && !tempAward.getRuleModels().isBlank()) {
+                // 有规则树配置 → 执行决策树
+                String treeId = tempAward.getRuleModels().trim();
+                awardId = treeFactory.process(treeId, userId, activityId, awardId);
+                log.info("规则树决策后 awardId={}", awardId);
+            }
+        }
+
+        // 查找最终奖品的完整信息（用于写订单）
         List<Award> awards = cacheService.getAwards(activityId);
         Award award = awards.stream()
                 .filter(a -> a.getAwardId().equals(awardId))
                 .findFirst()
                 .orElseThrow(() -> new BusinessException(1001, "奖品不存在: " + awardId));
-        log.info("抽奖结果 awardId={}, awardName={}", award.getAwardId(), award.getAwardName());
+        log.info("最终奖品 awardId={}, awardName={}", award.getAwardId(), award.getAwardName());
 
         // 6. 写入抽奖订单（status=0 待处理，等发奖完成后改为 1）
         String orderId = UUID.randomUUID().toString().replace("-", "");

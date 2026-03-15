@@ -26,4 +26,6 @@ public class Award {
     /** 排序，越小越靠前 */
     private Integer sort;
     private LocalDateTime createTime;
+    /** 关联的规则树 ID，如 "tree_lock_1"（Phase 3 新增） */
+    private String ruleModels;
 }

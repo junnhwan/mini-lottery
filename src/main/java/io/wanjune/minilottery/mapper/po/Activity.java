@@ -28,4 +28,6 @@ public class Activity {
     private LocalDateTime endTime;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
+    /** 责任链规则列表，逗号分隔，如 "rule_blacklist,rule_weight"（Phase 3 新增） */
+    private String ruleModels;
 }
