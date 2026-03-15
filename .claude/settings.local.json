@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mvn compile -q)",
+      "Bash(mvn compile)",
+      "Bash(mvn clean compile)",
+      "Bash(mvn test-compile)"
+    ]
+  }
+}

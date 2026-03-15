@@ -18,7 +18,7 @@ import io.wanjune.minilottery.mapper.po.LotteryOrder;
 import io.wanjune.minilottery.mapper.po.UserParticipateCount;
 import io.wanjune.minilottery.mq.producer.MQProducer;
 import io.wanjune.minilottery.service.LotteryService;
-import io.wanjune.minilottery.service.algorithm.DrawAlgorithm;
+import io.wanjune.minilottery.service.armory.StrategyArmory;
 import io.wanjune.minilottery.service.vo.DrawResultVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -46,11 +46,11 @@ public class LotteryServiceImpl implements LotteryService {
     private final AwardMapper awardMapper;
     private final LotteryOrderMapper lotteryOrderMapper;
     private final UserParticipateCountMapper userParticipateCountMapper;
-    private final DrawAlgorithm drawAlgorithm;
     private final StockService stockService;
     private final MultiLevelCacheService cacheService;
     private final AwardTaskMapper awardTaskMapper;
     private final MQProducer mqProducer;
+    private final StrategyArmory strategyArmory;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -87,9 +87,16 @@ public class LotteryServiceImpl implements LotteryService {
         }
         log.info("库存扣减成功");
 
-        // 5. 执行抽奖（多级缓存）
+        // 5. 执行抽奖（O(1) 或 O(log n) 算法，从 Redis 概率查找表中获取）
+        //    改造前：从缓存取奖品列表 → 遍历累加概率匹配（O(n)）
+        //    改造后：直接从 Redis Hash 中 O(1) 查找（概率表在启动时已装配）
+        String awardId = strategyArmory.draw(activityId);
+        // 通过 awardId 查找完整的奖品信息（用于写订单）
         List<Award> awards = cacheService.getAwards(activityId);
-        Award award = drawAlgorithm.draw(awards);
+        Award award = awards.stream()
+                .filter(a -> a.getAwardId().equals(awardId))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(1001, "奖品不存在: " + awardId));
         log.info("抽奖结果 awardId={}, awardName={}", award.getAwardId(), award.getAwardName());
 
         // 6. 写入抽奖订单（status=0 待处理，等发奖完成后改为 1）

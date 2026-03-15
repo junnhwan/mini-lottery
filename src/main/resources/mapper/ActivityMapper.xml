@@ -20,4 +20,8 @@
         WHERE activity_id = #{activityId}
     </update>
 
+    <select id="queryByStatus" resultType="Activity">
+        SELECT * FROM activity WHERE status = #{status}
+    </select>
+
 </mapper>
