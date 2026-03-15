@@ -1,6 +1,7 @@
 package io.wanjune.minilottery.service.armory;
 
 import io.wanjune.minilottery.common.enums.ActivityStatus;
+import io.wanjune.minilottery.lock.StockService;
 import io.wanjune.minilottery.mapper.ActivityMapper;
 import io.wanjune.minilottery.mapper.AwardMapper;
 import io.wanjune.minilottery.mapper.po.Activity;
@@ -46,6 +47,7 @@ public class StrategyArmory {
     private final AwardMapper awardMapper;
     private final ActivityMapper activityMapper;
     private final RedisTemplate<String, Object> redisTemplate;
+    private final StockService stockService;
 
     /**
      * Spring 自动注入：Map<beanName, bean> 形式注入所有 IDrawAlgorithm 实现
@@ -69,10 +71,12 @@ public class StrategyArmory {
     public StrategyArmory(AwardMapper awardMapper,
                           ActivityMapper activityMapper,
                           RedisTemplate<String, Object> redisTemplate,
+                          StockService stockService,
                           Map<String, IDrawAlgorithm> algorithmMap) {
         this.awardMapper = awardMapper;
         this.activityMapper = activityMapper;
         this.redisTemplate = redisTemplate;
+        this.stockService = stockService;
         this.algorithmMap = algorithmMap;
     }
 
@@ -148,6 +152,14 @@ public class StrategyArmory {
 
         // 5. 记录该活动使用的算法类型（抽奖时需要路由到正确的算法）
         redisTemplate.opsForValue().set(ALGORITHM_KEY_PREFIX + activityId, algorithmName);
+
+        // 6. 库存预热 — 将 DB 中的剩余库存加载到 Redis（Phase 2 新增）
+        //    DECR 扣减的前提是库存已经在 Redis 中，所以必须在装配时预热
+        //    preheatStock 内部会判断 isExists，已存在则跳过，防止覆盖正在扣减的值
+        Activity activity = activityMapper.queryByActivityId(activityId);
+        if (activity != null) {
+            stockService.preheatStock(activityId, activity.getRemainStock());
+        }
 
         log.info("活动装配完成 activityId={}, algorithm={}", activityId, algorithmName);
     }

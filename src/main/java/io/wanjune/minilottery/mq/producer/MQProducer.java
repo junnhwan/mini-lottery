@@ -9,9 +9,10 @@ import org.springframework.stereotype.Component;
 /**
  * MQ 消息生产者
  *
- * 负责发送两类消息：
+ * 负责发送三类消息：
  * 1. 发奖消息 → award.queue → AwardConsumer 异步执行发奖
- * 2. 延迟订单消息 → order.delay.queue（等 10min）→ order.timeout.queue → OrderTimeoutConsumer 检查超时
+ * 2. 库存异步落库消息 → stock.update.queue → StockUpdateConsumer 更新 DB 库存（Phase 2 新增）
+ * 3. 延迟订单消息 → order.delay.queue（等 10min）→ order.timeout.queue → OrderTimeoutConsumer 检查超时
  *
  * 为什么要异步发奖？
  * - 发奖可能涉及调用第三方接口（优惠券系统、物流系统），耗时不确定
@@ -39,6 +40,26 @@ public class MQProducer {
                 RabbitMQConfig.AWARD_EXCHANGE,
                 RabbitMQConfig.AWARD_ROUTING_KEY,
                 orderId
+        );
+    }
+
+    /**
+     * 发送库存异步落库消息（Phase 2 新增）
+     *
+     * Redis DECR 扣减成功后，通过 MQ 异步更新 DB 的 remain_stock
+     * 为什么不在抽奖事务内直接更新 DB 库存？
+     * - DECR 是原子操作，微秒级完成
+     * - DB UPDATE 涉及行锁 + WAL 写入，毫秒级
+     * - 分离后抽奖链路不依赖 DB 库存写入，响应更快
+     *
+     * @param activityId 活动ID
+     */
+    public void sendStockUpdateMessage(String activityId) {
+        log.info("发送库存异步落库消息 activityId={}", activityId);
+        rabbitTemplate.convertAndSend(
+                RabbitMQConfig.STOCK_UPDATE_EXCHANGE,
+                RabbitMQConfig.STOCK_UPDATE_ROUTING_KEY,
+                activityId
         );
     }
 

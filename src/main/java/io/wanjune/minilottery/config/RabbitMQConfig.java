@@ -60,6 +60,13 @@ public class RabbitMQConfig {
     /** 死信路由键 */
     public static final String ORDER_TIMEOUT_ROUTING_KEY = "order.timeout.routing";
 
+    /** 库存异步落库交换机（Phase 2 新增：DECR 后异步更新 DB 库存） */
+    public static final String STOCK_UPDATE_EXCHANGE = "stock.update.exchange";
+    /** 库存异步落库队列 */
+    public static final String STOCK_UPDATE_QUEUE = "stock.update.queue";
+    /** 库存异步落库路由键 */
+    public static final String STOCK_UPDATE_ROUTING_KEY = "stock.update.routing";
+
     /** 订单超时时间：10 分钟（毫秒） */
     public static final int ORDER_TTL = 10 * 60 * 1000;
 
@@ -78,6 +85,29 @@ public class RabbitMQConfig {
     @Bean
     public Binding awardBinding() {
         return BindingBuilder.bind(awardQueue()).to(awardExchange()).with(AWARD_ROUTING_KEY);
+    }
+
+    // ======================== 库存异步落库队列配置（Phase 2 新增） ========================
+
+    /**
+     * 库存异步落库交换机
+     *
+     * Phase 2 改造：Redis DECR 扣减库存后，通过 MQ 异步更新 DB
+     * 目的：解耦 Redis 扣减和 DB 更新，提高抽奖接口响应速度
+     */
+    @Bean
+    public DirectExchange stockUpdateExchange() {
+        return new DirectExchange(STOCK_UPDATE_EXCHANGE);
+    }
+
+    @Bean
+    public Queue stockUpdateQueue() {
+        return QueueBuilder.durable(STOCK_UPDATE_QUEUE).build();
+    }
+
+    @Bean
+    public Binding stockUpdateBinding() {
+        return BindingBuilder.bind(stockUpdateQueue()).to(stockUpdateExchange()).with(STOCK_UPDATE_ROUTING_KEY);
     }
 
     // ======================== 延迟队列配置（TTL + 死信） ========================

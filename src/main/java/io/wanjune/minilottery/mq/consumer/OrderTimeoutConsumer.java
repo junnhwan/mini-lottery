@@ -2,6 +2,7 @@ package io.wanjune.minilottery.mq.consumer;
 
 import io.wanjune.minilottery.common.enums.OrderStatus;
 import io.wanjune.minilottery.config.RabbitMQConfig;
+import io.wanjune.minilottery.lock.StockService;
 import io.wanjune.minilottery.mapper.ActivityMapper;
 import io.wanjune.minilottery.mapper.LotteryOrderMapper;
 import io.wanjune.minilottery.mapper.po.LotteryOrder;
@@ -42,6 +43,7 @@ public class OrderTimeoutConsumer {
 
     private final LotteryOrderMapper lotteryOrderMapper;
     private final ActivityMapper activityMapper;
+    private final StockService stockService;
 
     /**
      * 监听死信队列，处理超时订单
@@ -67,12 +69,18 @@ public class OrderTimeoutConsumer {
                 return;
             }
 
-            // 3. 超时处理：回滚库存 + 更新订单状态
-            // 3.1 回滚库存（remain_stock + 1）
-            activityMapper.rollbackStock(order.getActivityId());
-            log.info("库存已回滚 activityId={}", order.getActivityId());
+            // 3. 超时处理：回滚 Redis 库存 + DB 库存 + 更新订单状态
+            // 3.1 回滚 Redis 库存（INCR +1）— Phase 2 新增
+            //     因为抽奖时是 Redis DECR 扣减的，超时需要 INCR 补回来
+            //     注意：分段锁（SETNX）不需要清理，它有 TTL 会自动过期
+            stockService.rollbackStock(order.getActivityId());
+            log.info("Redis 库存已回滚 activityId={}", order.getActivityId());
 
-            // 3.2 更新订单状态为"已超时取消"（status=2）
+            // 3.2 回滚 DB 库存（remain_stock + 1）
+            activityMapper.rollbackStock(order.getActivityId());
+            log.info("DB 库存已回滚 activityId={}", order.getActivityId());
+
+            // 3.3 更新订单状态为"已超时取消"（status=2）
             lotteryOrderMapper.updateStatus(orderId, OrderStatus.TIMEOUT.getCode());
             log.info("订单已标记超时 orderId={}", orderId);
 

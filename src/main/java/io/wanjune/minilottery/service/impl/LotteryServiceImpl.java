@@ -80,8 +80,10 @@ public class LotteryServiceImpl implements LotteryService {
         }
         log.info("用户资格校验通过 已参与{}次, 上限{}次", count, activity.getMaxPerUser());
 
-        // 4. 分布式锁扣减库存
-        boolean success = stockService.deductStock(activityId);
+        // 4. Redis DECR 原子扣减库存（Phase 2 改造：Redisson 锁 → DECR + SETNX）
+        //    改造前：Redisson tryLock → DB UPDATE → 释放锁（串行）
+        //    改造后：Redis DECR 原子扣减 → SETNX 分段锁 → MQ 异步落库 DB（无锁并行）
+        boolean success = stockService.deductStock(activityId, activity.getEndTime());
         if (!success) {
             throw new BusinessException(1005, "库存不足或系统繁忙");
         }
@@ -131,14 +133,30 @@ public class LotteryServiceImpl implements LotteryService {
                 .build();
         awardTaskMapper.insert(awardTask);
 
-        // 9. 注册事务提交后回调，确保 DB 数据可见后再发 MQ
-        // 如果在事务内发 MQ，消费者可能在事务提交前就收到消息，查不到 DB 数据
+        // 9. 注册事务同步回调
+        //    afterCommit：事务成功 → 发 MQ（发奖 + 延迟超时 + 异步落库 DB）
+        //    afterCompletion(ROLLED_BACK)：事务回滚 → 补偿 Redis 库存（INCR 回去）
+        //
+        //    为什么需要 afterCompletion 补偿？
+        //    Redis DECR 发生在事务内（第 4 步），但 Redis 操作不在 Spring 事务管理范围内。
+        //    如果后续 DB 操作（写订单、写任务）失败导致事务回滚，Redis 库存已经被扣了，
+        //    必须手动 INCR 补回来，否则 Redis 和 DB 库存会永久不一致。
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
                 mqProducer.sendAwardMessage(orderId);
                 mqProducer.sendOrderDelayMessage(orderId);
+                mqProducer.sendStockUpdateMessage(activityId);
                 log.info("事务提交后 MQ 消息已发送 orderId={}", orderId);
+            }
+
+            @Override
+            public void afterCompletion(int status) {
+                if (status == STATUS_ROLLED_BACK) {
+                    // 事务回滚 → Redis 库存已被 DECR（第 4 步），需要 INCR 补偿回去
+                    stockService.rollbackStock(activityId);
+                    log.warn("事务回滚，Redis 库存已补偿 INCR activityId={}", activityId);
+                }
             }
         });
 
