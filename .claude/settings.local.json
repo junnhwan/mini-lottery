@@ -5,7 +5,10 @@
       "Bash(mvn compile)",
       "Bash(mvn clean compile)",
       "Bash(mvn test-compile)",
-      "Bash(mvn clean test-compile)"
+      "Bash(mvn clean test-compile)",
+      "Bash(mvn dependency:tree -Dincludes=com.google.guava)",
+      "Read(//c/Users/zjh/.m2/repository/com/google/**)",
+      "Read(//c/Users/zjh/.m2/**)"
     ]
   }
 }

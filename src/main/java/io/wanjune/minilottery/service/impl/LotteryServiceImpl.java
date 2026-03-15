@@ -100,33 +100,36 @@ public class LotteryServiceImpl implements LotteryService {
         //    权重命中 → 从权重子奖池抽奖
         //    默认 → 从全量奖池抽奖
         ChainFactory.ChainResult chainResult = chainFactory.openLogicChain(activityId).logic(userId, activityId);
-        String awardId = chainResult.awardId();
-        log.info("责任链结果 logicModel={}, awardId={}", chainResult.logicModel(), awardId);
+        String chainAwardId = chainResult.awardId();
+        log.info("责任链结果 logicModel={}, awardId={}", chainResult.logicModel(), chainAwardId);
 
         // 6. 规则树后置决策（Phase 3 改造）
         //    仅对 Weight/Default 结果执行（黑名单已经确定了奖品，不需要再走树）
         //    树流程：rule_lock（次数锁）→ rule_stock（奖品库存）→ rule_luck_award（兜底）
+        String awardId = chainAwardId;  // 默认使用责任链结果，规则树可能修改
         if (chainResult.logicModel() != ChainFactory.LogicModel.RULE_BLACKLIST) {
             // 查询该奖品是否配置了规则树
             List<Award> awards = cacheService.getAwards(activityId);
             Award tempAward = awards.stream()
-                    .filter(a -> a.getAwardId().equals(awardId))
+                    .filter(a -> a.getAwardId().equals(chainAwardId))
                     .findFirst()
                     .orElse(null);
             if (tempAward != null && tempAward.getRuleModels() != null && !tempAward.getRuleModels().isBlank()) {
                 // 有规则树配置 → 执行决策树
                 String treeId = tempAward.getRuleModels().trim();
-                awardId = treeFactory.process(treeId, userId, activityId, awardId);
+                awardId = treeFactory.process(treeId, userId, activityId, chainAwardId);
                 log.info("规则树决策后 awardId={}", awardId);
             }
         }
 
         // 查找最终奖品的完整信息（用于写订单）
+        // finalAwardId 是 effectively final，可以在 lambda 中使用
+        String finalAwardId = awardId;
         List<Award> awards = cacheService.getAwards(activityId);
         Award award = awards.stream()
-                .filter(a -> a.getAwardId().equals(awardId))
+                .filter(a -> a.getAwardId().equals(finalAwardId))
                 .findFirst()
-                .orElseThrow(() -> new BusinessException(1001, "奖品不存在: " + awardId));
+                .orElseThrow(() -> new BusinessException(1001, "奖品不存在: " + finalAwardId));
         log.info("最终奖品 awardId={}, awardName={}", award.getAwardId(), award.getAwardName());
 
         // 6. 写入抽奖订单（status=0 待处理，等发奖完成后改为 1）
