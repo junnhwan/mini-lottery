@@ -2,6 +2,9 @@ package io.wanjune.minilottery.service.impl;
 
 import io.wanjune.minilottery.cache.MultiLevelCacheService;
 import io.wanjune.minilottery.common.BusinessException;
+import io.wanjune.minilottery.common.enums.ActivityStatus;
+import io.wanjune.minilottery.common.enums.OrderStatus;
+import io.wanjune.minilottery.common.enums.TaskStatus;
 import io.wanjune.minilottery.lock.StockService;
 import io.wanjune.minilottery.mapper.ActivityMapper;
 import io.wanjune.minilottery.mapper.AwardMapper;
@@ -21,6 +24,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -59,7 +64,7 @@ public class LotteryServiceImpl implements LotteryService {
         if (activity == null) {
             throw new BusinessException(1001, "活动不存在");
         }
-        if (activity.getStatus() != 1) {
+        if (activity.getStatus() != ActivityStatus.ACTIVE.getCode()) {
             throw new BusinessException(1002, "活动未开始或已结束");
         }
         LocalDateTime now = LocalDateTime.now();
@@ -95,7 +100,7 @@ public class LotteryServiceImpl implements LotteryService {
                 .activityId(activityId)
                 .awardId(award.getAwardId())
                 .awardName(award.getAwardName())
-                .status(0)
+                .status(OrderStatus.PENDING.getCode())
                 .expireTime(LocalDateTime.now().plusMinutes(10))
                 .build();
         lotteryOrderMapper.insert(order);
@@ -114,15 +119,21 @@ public class LotteryServiceImpl implements LotteryService {
                 .userId(userId)
                 .awardId(award.getAwardId())
                 .awardType(award.getAwardType())
-                .status(0)
+                .status(TaskStatus.PENDING.getCode())
                 .retryCount(0)
                 .build();
         awardTaskMapper.insert(awardTask);
 
-        // 9. 发送 MQ 消息：异步发奖 + 延迟订单超时检查
-        mqProducer.sendAwardMessage(orderId);
-        mqProducer.sendOrderDelayMessage(orderId);
-        log.info("MQ 消息已发送 orderId={}", orderId);
+        // 9. 注册事务提交后回调，确保 DB 数据可见后再发 MQ
+        // 如果在事务内发 MQ，消费者可能在事务提交前就收到消息，查不到 DB 数据
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                mqProducer.sendAwardMessage(orderId);
+                mqProducer.sendOrderDelayMessage(orderId);
+                log.info("事务提交后 MQ 消息已发送 orderId={}", orderId);
+            }
+        });
 
         // 10. 组装返回结果
         DrawResultVO result = DrawResultVO.builder()

@@ -1,5 +1,6 @@
 package io.wanjune.minilottery.mq.consumer;
 
+import io.wanjune.minilottery.common.enums.OrderStatus;
 import io.wanjune.minilottery.config.RabbitMQConfig;
 import io.wanjune.minilottery.mapper.ActivityMapper;
 import io.wanjune.minilottery.mapper.LotteryOrderMapper;
@@ -60,7 +61,7 @@ public class OrderTimeoutConsumer {
             }
 
             // 2. 判断订单状态
-            if (order.getStatus() != 0) {
+            if (order.getStatus() != OrderStatus.PENDING.getCode()) {
                 // 非"待处理"状态，说明已经完成或已经超时处理过，幂等跳过
                 log.info("订单非待处理状态，跳过 orderId={}, status={}", orderId, order.getStatus());
                 return;
@@ -72,7 +73,7 @@ public class OrderTimeoutConsumer {
             log.info("库存已回滚 activityId={}", order.getActivityId());
 
             // 3.2 更新订单状态为"已超时取消"（status=2）
-            lotteryOrderMapper.updateStatus(orderId, 2);
+            lotteryOrderMapper.updateStatus(orderId, OrderStatus.TIMEOUT.getCode());
             log.info("订单已标记超时 orderId={}", orderId);
 
         } catch (Exception e) {

@@ -1,5 +1,8 @@
 package io.wanjune.minilottery.mq.consumer;
 
+import io.wanjune.minilottery.common.enums.AwardType;
+import io.wanjune.minilottery.common.enums.OrderStatus;
+import io.wanjune.minilottery.common.enums.TaskStatus;
 import io.wanjune.minilottery.config.RabbitMQConfig;
 import io.wanjune.minilottery.mapper.AwardTaskMapper;
 import io.wanjune.minilottery.mapper.LotteryOrderMapper;
@@ -57,26 +60,27 @@ public class AwardConsumer {
             }
 
             // 2. 幂等检查：已完成的任务不重复处理
-            if (task.getStatus() == 2) {
+            if (task.getStatus() == TaskStatus.COMPLETED.getCode()) {
                 log.info("发奖任务已完成，跳过 orderId={}", orderId);
                 return;
             }
 
             // 3. 更新任务状态为"发送中"
-            awardTaskMapper.updateStatus(orderId, 1);
+            awardTaskMapper.updateStatus(orderId, TaskStatus.PROCESSING.getCode());
 
             // 4. 根据奖品类型执行发奖（这里模拟发奖，实际会调用第三方接口）
             switch (task.getAwardType()) {
                 case 1 -> log.info("发放优惠券 userId={}, awardId={}", task.getUserId(), task.getAwardId());
                 case 2 -> log.info("发放实物奖品 userId={}, awardId={}", task.getUserId(), task.getAwardId());
                 case 3 -> log.info("谢谢参与，无需发奖 userId={}", task.getUserId());
+                default -> log.warn("未知奖品类型 awardType={}, orderId={}", task.getAwardType(), orderId);
             }
 
             // 5. 更新任务状态为"已完成"
-            awardTaskMapper.updateStatus(orderId, 2);
+            awardTaskMapper.updateStatus(orderId, TaskStatus.COMPLETED.getCode());
 
             // 6. 更新订单状态为"已完成"（关键！不改的话 OrderTimeoutConsumer 会误回滚）
-            lotteryOrderMapper.updateStatus(orderId, 1);
+            lotteryOrderMapper.updateStatus(orderId, OrderStatus.COMPLETED.getCode());
 
             log.info("发奖完成 orderId={}", orderId);
 
@@ -84,7 +88,7 @@ public class AwardConsumer {
             // 发奖失败：增加重试次数，抛出异常让 RabbitMQ 重试
             log.error("发奖失败 orderId={}", orderId, e);
             awardTaskMapper.incrementRetryCount(orderId);
-            awardTaskMapper.updateStatus(orderId, 3);  // 标记为失败
+            awardTaskMapper.updateStatus(orderId, TaskStatus.FAILED.getCode());
         }
     }
 }
