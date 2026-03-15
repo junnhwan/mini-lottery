@@ -11,6 +11,9 @@ import io.wanjune.minilottery.mapper.po.Award;
 import io.wanjune.minilottery.mq.producer.MQProducer;
 import io.wanjune.minilottery.service.armory.StrategyArmory;
 import io.wanjune.minilottery.service.impl.LotteryServiceImpl;
+import io.wanjune.minilottery.service.rule.chain.ChainFactory;
+import io.wanjune.minilottery.service.rule.chain.ILogicChain;
+import io.wanjune.minilottery.service.rule.tree.TreeFactory;
 import io.wanjune.minilottery.service.vo.DrawResultVO;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,7 +39,7 @@ import static org.mockito.Mockito.*;
  *
  * 测试各种异常场景下 BusinessException 是否正确抛出
  *
- * 注意：Phase 1 把 DrawAlgorithm 替换为 StrategyArmory，Phase 2 把 deductStock 签名改为 (String, LocalDateTime)
+ * Phase 3 改造：draw() 流程改为 ChainFactory（责任链）+ TreeFactory（规则树）
  * 成功场景中 MQ 发送在 TransactionSynchronization.afterCommit() 中，
  * 单元测试无真实事务所以 afterCommit 不会触发，MQ 验证由集成测试覆盖
  *
@@ -56,6 +59,8 @@ class LotteryServiceTest {
     @Mock private LotteryOrderMapper lotteryOrderMapper;
     @Mock private AwardTaskMapper awardTaskMapper;
     @Mock private MQProducer mqProducer;
+    @Mock private ChainFactory chainFactory;
+    @Mock private TreeFactory treeFactory;
 
     /**
      * 初始化事务同步管理器
@@ -144,9 +149,14 @@ class LotteryServiceTest {
         // Phase 2：deductStock 签名改为 (String, LocalDateTime)
         when(stockService.deductStock(eq("A001"), any(LocalDateTime.class))).thenReturn(true);
 
-        // Phase 1：DrawAlgorithm → StrategyArmory，返回 awardId 字符串
-        when(strategyArmory.draw("A001")).thenReturn("AWARD_001");
+        // Phase 3：draw() 改为调用 ChainFactory（责任链）+ TreeFactory（规则树）
+        // mock 责任链：openLogicChain → 返回 mock 链节点 → logic() 返回 RULE_DEFAULT 结果
+        ILogicChain mockChain = mock(ILogicChain.class);
+        when(chainFactory.openLogicChain("A001")).thenReturn(mockChain);
+        when(mockChain.logic("user001", "A001")).thenReturn(
+                new ChainFactory.ChainResult("AWARD_001", ChainFactory.LogicModel.RULE_DEFAULT));
 
+        // 奖品数据（ruleModels=null → 不走规则树）
         Award award = new Award();
         award.setAwardId("AWARD_001");
         award.setAwardName("优惠券");
@@ -163,8 +173,81 @@ class LotteryServiceTest {
         // 验证关键 DB 写入被调用
         verify(lotteryOrderMapper).insert(any());
         verify(awardTaskMapper).insert(any());
+        // 验证责任链被调用
+        verify(chainFactory).openLogicChain("A001");
+        verify(mockChain).logic("user001", "A001");
         // 注意：MQ 发送在 afterCommit() 中，单元测试无真实事务不会触发
-        // MQ 发送验证由 StockServiceTest（集成测试）覆盖
+    }
+
+    @Test
+    void draw_success_withRuleTree_shouldReturnTreeResult() {
+        Activity activity = buildActivity();
+        when(cacheService.getActivity("A001")).thenReturn(activity);
+        when(userParticipateCountMapper.queryByUserIdAndActivityId("user001", "A001")).thenReturn(0);
+        when(stockService.deductStock(eq("A001"), any(LocalDateTime.class))).thenReturn(true);
+
+        // 责任链返回 RULE_DEFAULT + 初始奖品 AWARD_001
+        ILogicChain mockChain = mock(ILogicChain.class);
+        when(chainFactory.openLogicChain("A001")).thenReturn(mockChain);
+        when(mockChain.logic("user001", "A001")).thenReturn(
+                new ChainFactory.ChainResult("AWARD_001", ChainFactory.LogicModel.RULE_DEFAULT));
+
+        // 奖品带规则树配置（ruleModels="tree_lock_1" → 需要走规则树决策）
+        Award award001 = new Award();
+        award001.setAwardId("AWARD_001");
+        award001.setAwardName("一等奖");
+        award001.setAwardType(2);
+        award001.setAwardRate(new BigDecimal("0.01"));
+        award001.setRuleModels("tree_lock_1");
+
+        // 规则树决策后返回兜底奖品 AWARD_004
+        Award award004 = new Award();
+        award004.setAwardId("AWARD_004");
+        award004.setAwardName("谢谢参与");
+        award004.setAwardType(3);
+        award004.setAwardRate(new BigDecimal("0.70"));
+
+        when(cacheService.getAwards("A001")).thenReturn(List.of(award001, award004));
+        // 规则树决策：tree_lock_1 判定后返回兜底奖品
+        when(treeFactory.process("tree_lock_1", "user001", "A001", "AWARD_001")).thenReturn("AWARD_004");
+
+        DrawResultVO result = lotteryService.draw("user001", "A001");
+
+        assertNotNull(result);
+        // 规则树将 AWARD_001 替换为兜底 AWARD_004
+        assertEquals("AWARD_004", result.getAwardId());
+        assertEquals("谢谢参与", result.getAwardName());
+
+        // 验证规则树被调用
+        verify(treeFactory).process("tree_lock_1", "user001", "A001", "AWARD_001");
+    }
+
+    @Test
+    void draw_success_blacklist_shouldSkipTree() {
+        Activity activity = buildActivity();
+        when(cacheService.getActivity("A001")).thenReturn(activity);
+        when(userParticipateCountMapper.queryByUserIdAndActivityId("user_black_001", "A001")).thenReturn(0);
+        when(stockService.deductStock(eq("A001"), any(LocalDateTime.class))).thenReturn(true);
+
+        // 黑名单命中 → 直接返回兜底奖品，跳过规则树
+        ILogicChain mockChain = mock(ILogicChain.class);
+        when(chainFactory.openLogicChain("A001")).thenReturn(mockChain);
+        when(mockChain.logic("user_black_001", "A001")).thenReturn(
+                new ChainFactory.ChainResult("AWARD_004", ChainFactory.LogicModel.RULE_BLACKLIST));
+
+        Award award004 = new Award();
+        award004.setAwardId("AWARD_004");
+        award004.setAwardName("谢谢参与");
+        award004.setAwardType(3);
+        award004.setAwardRate(new BigDecimal("0.70"));
+        when(cacheService.getAwards("A001")).thenReturn(List.of(award004));
+
+        DrawResultVO result = lotteryService.draw("user_black_001", "A001");
+
+        assertEquals("AWARD_004", result.getAwardId());
+        assertEquals("谢谢参与", result.getAwardName());
+        // 黑名单命中时不应调用规则树
+        verify(treeFactory, never()).process(anyString(), anyString(), anyString(), anyString());
     }
 
     // ========== 辅助方法 ==========
