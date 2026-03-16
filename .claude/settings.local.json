@@ -8,7 +8,9 @@
       "Bash(mvn clean test-compile)",
       "Bash(mvn dependency:tree -Dincludes=com.google.guava)",
       "Read(//c/Users/zjh/.m2/repository/com/google/**)",
-      "Read(//c/Users/zjh/.m2/**)"
+      "Read(//c/Users/zjh/.m2/**)",
+      "Bash(mvn test-compile -q)",
+      "Bash(mvn test -pl . -Dtest=io.wanjune.minilottery.service.UserBehaviorTest)"
     ]
   }
 }

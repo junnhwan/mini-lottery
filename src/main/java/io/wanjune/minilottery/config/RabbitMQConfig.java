@@ -67,6 +67,13 @@ public class RabbitMQConfig {
     /** 库存异步落库路由键 */
     public static final String STOCK_UPDATE_ROUTING_KEY = "stock.update.routing";
 
+    /** 返利交换机（Phase 5 新增：签到返利 + 积分兑换 → 增加抽奖机会） */
+    public static final String REBATE_EXCHANGE = "rebate.exchange";
+    /** 返利队列 */
+    public static final String REBATE_QUEUE = "rebate.queue";
+    /** 返利路由键 */
+    public static final String REBATE_ROUTING_KEY = "rebate.routing";
+
     /** 订单超时时间：10 分钟（毫秒） */
     public static final int ORDER_TTL = 10 * 60 * 1000;
 
@@ -108,6 +115,29 @@ public class RabbitMQConfig {
     @Bean
     public Binding stockUpdateBinding() {
         return BindingBuilder.bind(stockUpdateQueue()).to(stockUpdateExchange()).with(STOCK_UPDATE_ROUTING_KEY);
+    }
+
+    // ======================== 返利队列配置（Phase 5 新增） ========================
+
+    /**
+     * 返利交换机
+     *
+     * Phase 5 新增：签到返利 / 积分兑换 → 发 MQ → RebateConsumer 增加抽奖机会
+     * 消息体为 JSON（包含 userId、activityId、type、rewardCount）
+     */
+    @Bean
+    public DirectExchange rebateExchange() {
+        return new DirectExchange(REBATE_EXCHANGE);
+    }
+
+    @Bean
+    public Queue rebateQueue() {
+        return QueueBuilder.durable(REBATE_QUEUE).build();
+    }
+
+    @Bean
+    public Binding rebateBinding() {
+        return BindingBuilder.bind(rebateQueue()).to(rebateExchange()).with(REBATE_ROUTING_KEY);
     }
 
     // ======================== 延迟队列配置（TTL + 死信） ========================

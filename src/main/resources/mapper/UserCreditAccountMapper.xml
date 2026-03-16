@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="io.wanjune.minilottery.mapper.UserCreditAccountMapper">
+
+    <!--
+        新增或累加积分（ON DUPLICATE KEY UPDATE）
+        首次调用 INSERT 新记录，后续调用 UPDATE 累加
+        total_credit 只增不减（累计统计），available_credit 是可用余额
+    -->
+    <insert id="insertOrAddCredit">
+        INSERT INTO user_credit_account (user_id, total_credit, available_credit)
+        VALUES (#{userId}, #{amount}, #{amount})
+        ON DUPLICATE KEY UPDATE
+            total_credit = total_credit + #{amount},
+            available_credit = available_credit + #{amount}
+    </insert>
+
+    <!--
+        扣减积分
+        WHERE available_credit >= #{cost} 保证不会扣成负数
+        返回影响行数：0 = 余额不足，1 = 扣减成功
+    -->
+    <update id="deductCredit">
+        UPDATE user_credit_account
+        SET available_credit = available_credit - #{cost}
+        WHERE user_id = #{userId} AND available_credit >= #{cost}
+    </update>
+
+    <select id="queryByUserId" resultType="io.wanjune.minilottery.mapper.po.UserCreditAccount">
+        SELECT id, user_id, total_credit, available_credit, create_time, update_time
+        FROM user_credit_account
+        WHERE user_id = #{userId}
+    </select>
+
+</mapper>

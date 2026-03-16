@@ -77,12 +77,18 @@ public class LotteryServiceImpl implements LotteryService {
         }
         log.info("活动校验通过 activity={}, remainStock={}", activity.getActivityName(), activity.getRemainStock());
 
-        // 3. 校验用户参与资格
+        // 3. 校验用户参与资格（Phase 5 改造：加入 bonus_count 额外抽奖机会）
+        //    改造前：participateCount >= maxPerUser → 拒绝
+        //    改造后：participateCount >= maxPerUser + bonusCount → 拒绝
+        //    面试点：签到/兑换获得的 bonus_count 扩展了用户可参与次数
         int count = userParticipateCountMapper.queryByUserIdAndActivityId(userId, activityId);
-        if (count >= activity.getMaxPerUser()) {
+        int bonusCount = userParticipateCountMapper.queryBonusCount(userId, activityId);
+        int totalAllowed = activity.getMaxPerUser() + bonusCount;
+        if (count >= totalAllowed) {
             throw new BusinessException(1004, "已达最大参与次数");
         }
-        log.info("用户资格校验通过 已参与{}次, 上限{}次", count, activity.getMaxPerUser());
+        log.info("用户资格校验通过 已参与{}次, 基础上限{}次, 额外机会{}次, 总上限{}次",
+                count, activity.getMaxPerUser(), bonusCount, totalAllowed);
 
         // 4. Redis DECR 原子扣减库存（Phase 2 改造：Redisson 锁 → DECR + SETNX）
         //    改造前：Redisson tryLock → DB UPDATE → 释放锁（串行）

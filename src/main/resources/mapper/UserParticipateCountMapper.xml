@@ -16,4 +16,23 @@
         ON DUPLICATE KEY UPDATE participate_count = participate_count + 1
     </insert>
 
+    <!-- 查询额外抽奖机会（签到/兑换获得），不存在返回 0 -->
+    <select id="queryBonusCount" resultType="int">
+        SELECT IFNULL(
+            (SELECT bonus_count FROM user_participate_count
+             WHERE user_id = #{userId} AND activity_id = #{activityId}),
+            0)
+    </select>
+
+    <!--
+        增加额外抽奖机会（MQ 消费者调用）
+        ON DUPLICATE KEY UPDATE：记录已存在则累加 bonus_count
+        记录不存在则 INSERT（participate_count=0，bonus_count=rewardCount）
+    -->
+    <insert id="addBonusCount">
+        INSERT INTO user_participate_count (user_id, activity_id, participate_count, bonus_count)
+        VALUES (#{userId}, #{activityId}, 0, #{rewardCount})
+        ON DUPLICATE KEY UPDATE bonus_count = bonus_count + #{rewardCount}
+    </insert>
+
 </mapper>

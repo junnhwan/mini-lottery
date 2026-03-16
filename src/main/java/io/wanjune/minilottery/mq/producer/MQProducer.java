@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
  * 1. 发奖消息 → award.queue → AwardConsumer 异步执行发奖
  * 2. 库存异步落库消息 → stock.update.queue → StockUpdateConsumer 更新 DB 库存（Phase 2 新增）
  * 3. 延迟订单消息 → order.delay.queue（等 10min）→ order.timeout.queue → OrderTimeoutConsumer 检查超时
+ * 4. 返利消息 → rebate.queue → RebateConsumer 增加抽奖机会（Phase 5 新增）
  *
  * 为什么要异步发奖？
  * - 发奖可能涉及调用第三方接口（优惠券系统、物流系统），耗时不确定
@@ -80,6 +81,27 @@ public class MQProducer {
                 RabbitMQConfig.ORDER_DELAY_EXCHANGE,
                 RabbitMQConfig.ORDER_DELAY_ROUTING_KEY,
                 orderId
+        );
+    }
+
+    /**
+     * 发送返利消息（Phase 5 新增）
+     *
+     * 签到返利 / 积分兑换后，通过 MQ 异步增加用户的额外抽奖机会
+     * 消息体为 JSON 字符串，包含 userId、activityId、type、rewardCount
+     *
+     * 为什么用 MQ 而不是同步调用？
+     * - 签到/兑换操作和增加抽奖机会是两个独立业务，MQ 解耦
+     * - 即使 Consumer 暂时不可用，消息会在队列中等待，保证最终一致
+     *
+     * @param jsonMessage JSON 格式消息体
+     */
+    public void sendRebateMessage(String jsonMessage) {
+        log.info("发送返利消息 message={}", jsonMessage);
+        rabbitTemplate.convertAndSend(
+                RabbitMQConfig.REBATE_EXCHANGE,
+                RabbitMQConfig.REBATE_ROUTING_KEY,
+                jsonMessage
         );
     }
 }

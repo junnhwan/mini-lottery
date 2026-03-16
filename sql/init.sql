@@ -206,3 +206,35 @@ INSERT INTO rule_tree_node_line (tree_id, rule_node_from, rule_node_to, rule_lim
 ('tree_lock_1', 'rule_lock',  'rule_stock',      'EQUAL', 'ALLOW'),
 ('tree_lock_1', 'rule_lock',  'rule_luck_award', 'EQUAL', 'TAKE_OVER'),
 ('tree_lock_1', 'rule_stock', 'rule_luck_award', 'EQUAL', 'ALLOW');
+
+-- ============================================
+-- Phase 5: 签到返利 + 积分兑换（新增表 + 字段）
+-- ============================================
+
+-- 用户参与次数表新增 bonus_count 字段（签到/兑换获得的额外抽奖机会）
+ALTER TABLE user_participate_count ADD COLUMN bonus_count INT NOT NULL DEFAULT 0 COMMENT '额外抽奖机会（签到/兑换获得）';
+
+-- 10. 每日签到记录表
+-- 幂等设计：UNIQUE(user_id, activity_id, sign_date) 防止同一天重复签到
+DROP TABLE IF EXISTS daily_sign_in;
+CREATE TABLE daily_sign_in (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id VARCHAR(32) NOT NULL COMMENT '用户ID',
+    activity_id VARCHAR(32) NOT NULL COMMENT '活动ID',
+    sign_date DATE NOT NULL COMMENT '签到日期',
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE INDEX uk_user_activity_date (user_id, activity_id, sign_date)
+) ENGINE=InnoDB COMMENT='每日签到记录表';
+
+-- 11. 用户积分账户表
+-- 每个用户一个积分账户，UNIQUE(user_id) 保证唯一
+DROP TABLE IF EXISTS user_credit_account;
+CREATE TABLE user_credit_account (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id VARCHAR(32) NOT NULL COMMENT '用户ID',
+    total_credit INT NOT NULL DEFAULT 0 COMMENT '累计获得积分',
+    available_credit INT NOT NULL DEFAULT 0 COMMENT '可用积分余额',
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE INDEX uk_user_id (user_id)
+) ENGINE=InnoDB COMMENT='用户积分账户表';
