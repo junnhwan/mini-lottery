@@ -6,20 +6,20 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * 接口限流注解
+ * 接口限流注解 — Guava 令牌桶 + 超频自动拉黑 + 兜底方法
  *
- * 使用方式：贴在 Controller 方法上即可生效
- * 示例：@RateLimit(permits = 5, window = 60) 表示 60 秒内最多允许 5 次请求
+ * 使用方式：贴在 Controller 方法上，指定 fallbackMethod（必填）
+ * 示例：@RateLimit(permitsPerSecond = 1.0, blacklistCount = 10, fallbackMethod = "drawRateLimitFallback")
  *
- * 实现原理：
- * - AOP 切面拦截带此注解的方法
- * - 使用 Redis ZSET + 滑动窗口算法判断是否超限
- * - 限流粒度：按 userId 限流（从请求参数中提取）
+ * 改造历程（面试追问点）：
+ * - Phase 1（Week 3）：Redis ZSET 滑动窗口（3 次 Redis 调用，非原子操作）
+ * - Phase 4（当前）：Guava 令牌桶（JVM 本地，微秒级，零网络开销）
  *
- * 面试点：
- * - 为什么选滑动窗口而不是固定窗口？→ 固定窗口有边界突刺问题（窗口切换瞬间可能涌入 2 倍流量）
- * - 为什么用 Redis ZSET？→ ZREMRANGEBYSCORE 天然支持按时间范围清理，ZCARD 统计窗口内请求数
- * - 和令牌桶的区别？→ 令牌桶允许突发流量（桶里攒了令牌），滑动窗口严格控制窗口内总量
+ * 为什么从 Redis 滑动窗口改为 Guava 令牌桶？
+ * 1. 性能：Redis 需要 3 次网络调用（ZREMRANGEBYSCORE + ZCARD + ZADD），Guava 纯本地操作
+ * 2. 原子性：Redis 方案非原子（3 步操作之间可能被其他请求穿插），Guava tryAcquire 天然原子
+ * 3. 令牌桶允许突发（攒的令牌可以一次消耗），比滑动窗口更适合抽奖场景（用户偶尔集中点击）
+ * 4. 单实例部署下本地限流完全够用，多实例可在 Nginx 层再加一道
  *
  * @author zjh
  * @since 2026/3/10
@@ -29,20 +29,38 @@ import java.lang.annotation.Target;
 public @interface RateLimit {
 
     /**
-     * 窗口内最大请求数
-     * 例：permits = 5 表示窗口期内最多 5 次
+     * 限流 key 对应的方法参数名
+     * AOP 切面会从方法参数中找到该名称的参数值，作为每用户独立限流的标识
+     * 默认 "userId"，即按用户维度限流
      */
-    int permits() default 5;
+    String key() default "userId";
 
     /**
-     * 时间窗口，单位：秒
-     * 例：window = 60 表示 60 秒的滑动窗口
+     * 令牌桶每秒生成的令牌数（Guava RateLimiter 的核心参数）
+     *
+     * 例：permitsPerSecond = 1.0 表示每秒生成 1 个令牌
+     * 令牌会累积（桶未满时），允许短时间突发流量
+     * 默认 1.0 QPS
      */
-    int window() default 60;
+    double permitsPerSecond() default 1.0;
 
     /**
-     * 限流 key 前缀，默认使用方法路径
-     * 最终 Redis key = rate_limit:{prefix}:{userId}
+     * 触发自动拉黑的连续限流次数
+     *
+     * 例：blacklistCount = 10 表示连续被限流 10 次后，用户被拉黑（24 小时内直接拒绝）
+     * 设为 0 表示不启用拉黑功能
      */
-    String prefix() default "";
+    int blacklistCount() default 0;
+
+    /**
+     * 兜底方法名（必填）
+     *
+     * 被限流或拉黑时，AOP 通过反射调用同一 Controller 中的该方法
+     * 要求：方法签名必须与被拦截方法完全一致（参数类型 + 返回类型）
+     *
+     * 为什么用 fallback 而不是直接抛异常？
+     * → 异常返回给前端是一个 error，用户体验差
+     * → fallback 返回友好提示（如"请稍后再试"），不触发前端错误处理逻辑
+     */
+    String fallbackMethod();
 }

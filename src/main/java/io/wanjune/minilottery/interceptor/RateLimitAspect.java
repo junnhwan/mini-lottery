@@ -1,40 +1,35 @@
 package io.wanjune.minilottery.interceptor;
 
-import io.wanjune.minilottery.common.BusinessException;
-import lombok.RequiredArgsConstructor;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
+import com.google.common.util.concurrent.RateLimiter;
 import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 限流切面 — 基于 Redis ZSET 的滑动窗口算法
+ * 限流切面 — Guava 令牌桶 + 超频自动拉黑 + 反射调用 fallback
  *
- * 核心原理：
- * 1. Redis ZSET 的 key = rate_limit:{接口路径}:{userId}
- * 2. 每个请求作为一个 member 存入 ZSET，score 为当前时间戳（毫秒）
- * 3. 每次请求先清理窗口外的过期数据（ZREMRANGEBYSCORE）
- * 4. 再统计窗口内的请求数（ZCARD）
- * 5. 未超限 → 添加记录并放行；超限 → 拒绝
+ * 改造前（Phase 1 / Week 3）：
+ *   Redis ZSET 滑动窗口 → ZREMRANGEBYSCORE + ZCARD + ZADD（3 次网络调用，非原子）
  *
- * 滑动窗口 vs 固定窗口：
- * - 固定窗口：把时间切成固定区间（如每分钟），窗口边界处可能瞬间涌入 2 倍流量
- *   例：窗口 0:00~1:00 限 5 次，0:59 来 5 次 + 1:01 来 5 次 = 2 秒内 10 次请求
- * - 滑动窗口：以当前时刻为终点往前推 N 秒，没有边界问题，更平滑
+ * 改造后（Phase 4）：
+ *   Guava RateLimiter 令牌桶（JVM 本地，微秒级）+ Guava Cache 拉黑计数器
  *
- * 为什么用 ZSET？
- * - ZREMRANGEBYSCORE：O(logN+M) 高效清理过期数据
- * - ZCARD：O(1) 统计当前窗口请求数
- * - ZADD：O(logN) 添加请求记录
- * - TTL：给整个 key 设过期时间，防止用户不再请求后 key 永远残留
+ * 核心组件：
+ * 1. rateLimiterCache — 每用户一个令牌桶，1 分钟不活跃自动清理
+ * 2. blacklistCache  — 拉黑计数器，超频 N 次后标记为黑名单，24 小时自动解封
+ *
+ * 面试追问：为什么用 Guava 本地方案而非 Redis 分布式？
+ * → 单实例部署下性能更高（微秒 vs 毫秒），无网络开销，无原子性问题
+ * → 多实例部署可在 Nginx 层再加一道 limit_req，形成两级限流
  *
  * @author zjh
  * @since 2026/3/10
@@ -42,86 +37,115 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 @Aspect
 @Component
-@RequiredArgsConstructor
 public class RateLimitAspect {
 
-    private final RedisTemplate<String, Object> redisTemplate;
+    /**
+     * 每用户独立的令牌桶缓存
+     * key = userId，value = 该用户的 RateLimiter 实例
+     * expireAfterAccess(1min)：用户 1 分钟内没有新请求就清理掉，释放内存
+     *
+     * 面试点：为什么不用 ConcurrentHashMap？
+     * → Guava Cache 自带过期淘汰，ConcurrentHashMap 需要自己写定时清理
+     */
+    private final Cache<String, RateLimiter> rateLimiterCache = CacheBuilder.newBuilder()
+            .expireAfterAccess(1, TimeUnit.MINUTES)
+            .build();
 
-    private static final String RATE_LIMIT_PREFIX = "rate_limit:";
+    /**
+     * 超频拉黑计数器
+     * key = userId，value = 连续被限流的次数
+     * expireAfterWrite(24h)：拉黑后 24 小时自动解封
+     *
+     * 面试点：为什么是 expireAfterWrite 而不是 expireAfterAccess？
+     * → Write：从首次被限流开始计时 24 小时，期间无论访问多少次都不会重置
+     * → Access：每次被拒绝都会刷新过期时间，导致永远不解封
+     */
+    private final Cache<String, Long> blacklistCache = CacheBuilder.newBuilder()
+            .expireAfterWrite(24, TimeUnit.HOURS)
+            .build();
 
     /**
      * 环绕通知：拦截所有带 @RateLimit 注解的方法
      *
-     * @Around 的执行流程：
-     * 1. 方法执行前 → 限流判断
-     * 2. 未超限 → joinPoint.proceed() 放行执行原方法
-     * 3. 超限 → 直接抛异常，原方法不执行
+     * 执行流程：
+     * 1. 提取 userId → 2. 检查黑名单 → 3. 令牌桶判断 → 4. 放行或调 fallback
      */
     @Around("@annotation(rateLimit)")
     public Object around(ProceedingJoinPoint joinPoint, RateLimit rateLimit) throws Throwable {
 
-        // --- 1. 构建限流 key ---
-        // 从方法参数中提取 userId 作为限流粒度（每个用户独立计数）
-        String userId = extractUserId(joinPoint);
-        String prefix = rateLimit.prefix().isEmpty()
-                ? joinPoint.getSignature().toShortString()  // 默认用方法签名，如 "LotteryController.draw(..)"
-                : rateLimit.prefix();
-        String key = RATE_LIMIT_PREFIX + prefix + ":" + userId;
+        // --- 1. 提取限流标识（userId） ---
+        String userId = extractKeyValue(joinPoint, rateLimit.key());
 
-        // --- 2. 读取注解配置 ---
-        int permits = rateLimit.permits();   // 窗口内最大请求数
-        int window = rateLimit.window();     // 时间窗口（秒）
-
-        // --- 3. 滑动窗口算法 ---
-        long now = System.currentTimeMillis();
-        long windowStart = now - window * 1000L;  // 窗口起始时间
-
-        // 3.1 清理窗口外的过期请求记录
-        // ZREMRANGEBYSCORE key -inf windowStart
-        // 把 score < windowStart 的 member 全部移除
-        redisTemplate.opsForZSet().removeRangeByScore(key, 0, windowStart);
-
-        // 3.2 统计当前窗口内的请求数
-        // ZCARD key → 返回 ZSET 中的 member 数量
-        Long count = redisTemplate.opsForZSet().zCard(key);
-
-        if (count != null && count >= permits) {
-            // --- 4. 超限：拒绝请求 ---
-            log.warn("接口限流 key={}, 当前请求数={}, 上限={}", key, count, permits);
-            throw new BusinessException(1006, "请求过于频繁，请稍后再试");
+        // --- 2. 黑名单检查（短路优化：被拉黑直接拒绝，不消耗令牌桶资源） ---
+        if (rateLimit.blacklistCount() > 0) {
+            Long violationCount = blacklistCache.getIfPresent(userId);
+            if (violationCount != null && violationCount >= rateLimit.blacklistCount()) {
+                log.warn("用户已被拉黑 userId={}, 违规次数={}, 阈值={}",
+                        userId, violationCount, rateLimit.blacklistCount());
+                return invokeFallback(joinPoint, rateLimit.fallbackMethod());
+            }
         }
 
-        // --- 5. 未超限：记录本次请求并放行 ---
-        // ZADD key score member
-        // member 用 UUID 保证唯一性（同一毫秒可能有多个请求）
-        // score 用当前时间戳，方便按时间范围清理
-        redisTemplate.opsForZSet().add(key, UUID.randomUUID().toString(), now);
+        // --- 3. 令牌桶检查 ---
+        // getIfPresent + put 代替 get(callable)，避免 ExecutionException 包装
+        RateLimiter rateLimiter = rateLimiterCache.getIfPresent(userId);
+        if (rateLimiter == null) {
+            rateLimiter = RateLimiter.create(rateLimit.permitsPerSecond());
+            rateLimiterCache.put(userId, rateLimiter);
+        }
 
-        // 给 key 设置过期时间 = 窗口大小 + 1 秒（兜底清理，防止 key 永远残留）
-        redisTemplate.expire(key, window + 1, TimeUnit.SECONDS);
+        // tryAcquire()：非阻塞尝试获取令牌
+        // 面试点：为什么用 tryAcquire 而不是 acquire？
+        // → acquire 会阻塞等待令牌（线程挂起），tryAcquire 立即返回，不影响 Tomcat 线程池
+        if (rateLimiter.tryAcquire()) {
+            // --- 4a. 获取令牌成功 → 放行 ---
+            return joinPoint.proceed();
+        }
 
-        log.debug("限流放行 key={}, 当前请求数={}/{}", key, count + 1, permits);
+        // --- 4b. 获取令牌失败 → 累加拉黑计数 + 调用 fallback ---
+        if (rateLimit.blacklistCount() > 0) {
+            Long current = blacklistCache.getIfPresent(userId);
+            long newCount = (current == null) ? 1L : current + 1L;
+            blacklistCache.put(userId, newCount);
+            log.warn("限流触发 userId={}, 累计违规={}/{}", userId, newCount, rateLimit.blacklistCount());
+        } else {
+            log.warn("限流触发 userId={}", userId);
+        }
 
-        // --- 6. 执行原方法 ---
-        return joinPoint.proceed();
+        return invokeFallback(joinPoint, rateLimit.fallbackMethod());
     }
 
     /**
-     * 从方法参数中提取 userId
+     * 通过反射调用 fallback 方法
      *
-     * 遍历方法的参数列表，找到名为 "userId" 的参数并返回其值
-     * 如果找不到，降级为 "anonymous"（按匿名用户统一限流）
+     * 要求 fallback 方法与原方法在同一个类中，且参数签名完全一致
+     * 通过 getMethod(name, parameterTypes) 查找 → invoke(target, args)
      *
-     * 注意：编译时需要保留参数名（Spring Boot 默认开启 -parameters 编译选项）
+     * 面试点：为什么用反射而不是接口回调？
+     * → 注解驱动更简洁，开发者只需在 Controller 中写一个同签名方法
+     * → 接口回调需要 Controller 实现特定接口，侵入性强
      */
-    private String extractUserId(ProceedingJoinPoint joinPoint) {
+    private Object invokeFallback(ProceedingJoinPoint joinPoint, String fallbackMethod) throws Exception {
+        MethodSignature signature = (MethodSignature) joinPoint.getSignature();
+        Method method = joinPoint.getTarget().getClass()
+                .getMethod(fallbackMethod, signature.getParameterTypes());
+        return method.invoke(joinPoint.getTarget(), joinPoint.getArgs());
+    }
+
+    /**
+     * 从方法参数中按名称提取限流 key 值
+     *
+     * 遍历方法参数，找到名称匹配 key 的参数并返回其值
+     * 注意：需要编译时保留参数名（Spring Boot 默认开启 -parameters）
+     */
+    private String extractKeyValue(ProceedingJoinPoint joinPoint, String key) {
         MethodSignature signature = (MethodSignature) joinPoint.getSignature();
         Method method = signature.getMethod();
         Parameter[] parameters = method.getParameters();
         Object[] args = joinPoint.getArgs();
 
         for (int i = 0; i < parameters.length; i++) {
-            if ("userId".equals(parameters[i].getName()) && args[i] != null) {
+            if (key.equals(parameters[i].getName()) && args[i] != null) {
                 return args[i].toString();
             }
         }
