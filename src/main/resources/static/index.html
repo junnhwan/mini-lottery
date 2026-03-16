@@ -199,6 +199,93 @@
             font-size: 14px;
         }
 
+        /* ====== Sign-in Button ====== */
+        .btn-sign {
+            width: 100%;
+            height: 48px;
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: 2px;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.15s;
+            margin-top: 8px;
+        }
+        .btn-sign:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(46, 204, 113, 0.35);
+        }
+        .btn-sign:active { transform: translateY(0); }
+        .btn-sign:disabled { opacity: 0.6; cursor: not-allowed; transform: none; box-shadow: none; }
+
+        /* ====== Credit Exchange Button ====== */
+        .btn-exchange {
+            width: 100%;
+            height: 42px;
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.15s;
+            margin-top: 8px;
+        }
+        .btn-exchange:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(52, 152, 219, 0.35);
+        }
+        .btn-exchange:active { transform: translateY(0); }
+        .btn-exchange:disabled { opacity: 0.6; cursor: not-allowed; transform: none; box-shadow: none; }
+
+        /* ====== Credit Info ====== */
+        .credit-info {
+            display: flex;
+            justify-content: space-around;
+            margin: 16px 0;
+            padding: 16px;
+            background: linear-gradient(135deg, #fff9f0, #fff2e8);
+            border-radius: 8px;
+            border: 1px solid #ffd8a8;
+        }
+        .credit-item {
+            text-align: center;
+        }
+        .credit-item .label {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 4px;
+        }
+        .credit-item .value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #d4380d;
+        }
+
+        /* ====== Section Divider ====== */
+        .section-divider {
+            text-align: center;
+            color: #ccc;
+            font-size: 12px;
+            margin: 8px 0 20px;
+            position: relative;
+        }
+        .section-divider::before,
+        .section-divider::after {
+            content: '';
+            display: inline-block;
+            width: 60px;
+            height: 1px;
+            background: #e0e0e0;
+            vertical-align: middle;
+            margin: 0 12px;
+        }
+
         /* ====== Footer ====== */
         .footer {
             text-align: center;
@@ -245,6 +332,36 @@
         <div id="recordsBody">
             <div class="empty-tip">点击上方按钮查询</div>
         </div>
+    </div>
+    <!-- 每日签到 -->
+    <div class="card">
+        <div class="card-title" style="border-left-color:#27ae60;">每日签到</div>
+        <p style="font-size:13px;color:#888;margin-bottom:16px;">每日签到获得 10 积分，积分可兑换额外抽奖机会</p>
+        <button class="btn-sign" id="signBtn" onclick="doSignIn()">签 到 领 积 分</button>
+        <div class="result" id="signResult"></div>
+    </div>
+
+    <!-- 积分中心 -->
+    <div class="card">
+        <div class="card-title" style="border-left-color:#faad14;">积分中心</div>
+
+        <!-- 查询积分 -->
+        <button class="btn-draw" style="background:linear-gradient(135deg,#faad14,#d48806);margin-top:0;height:38px;font-size:14px;" onclick="loadCredit()">
+            查询积分
+        </button>
+        <div id="creditBody">
+            <div class="empty-tip">点击上方按钮查询积分</div>
+        </div>
+
+        <div class="section-divider">积分兑换</div>
+
+        <!-- 积分兑换 -->
+        <div class="form-group" style="margin-bottom:8px;">
+            <label>消耗积分数</label>
+            <input type="number" id="exchangeCost" value="10" min="1" placeholder="输入消耗积分">
+        </div>
+        <button class="btn-exchange" id="exchangeBtn" onclick="doExchange()">兑 换 抽 奖 机 会</button>
+        <div class="result" id="exchangeResult"></div>
     </div>
 </div>
 
@@ -338,6 +455,111 @@
             `;
         } catch (e) {
             body.innerHTML = '<div class="empty-tip">查询失败，请检查服务</div>';
+        }
+    }
+
+    // ==================== 签到 ====================
+    async function doSignIn() {
+        const userId = document.getElementById('userId').value.trim();
+        const activityId = document.getElementById('activityId').value;
+        const btn = document.getElementById('signBtn');
+        const resultDiv = document.getElementById('signResult');
+
+        if (!userId) { alert('请输入用户ID'); return; }
+
+        btn.disabled = true;
+        btn.textContent = '签 到 中 ...';
+        resultDiv.className = 'result';
+
+        try {
+            const resp = await fetch(`${BASE}/api/user/sign-in?userId=${userId}&activityId=${activityId}`, {
+                method: 'POST'
+            });
+            const data = await resp.json();
+
+            if (data.code === 0) {
+                resultDiv.innerHTML = '<div class="award-name" style="font-size:18px;color:#27ae60;">签到成功，积分 +10</div>';
+                resultDiv.className = 'result success';
+            } else {
+                resultDiv.innerHTML = `<div class="error-msg">${data.message}</div>`;
+                resultDiv.className = 'result error';
+            }
+        } catch (e) {
+            resultDiv.innerHTML = '<div class="error-msg">网络异常</div>';
+            resultDiv.className = 'result error';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '签 到 领 积 分';
+        }
+    }
+
+    // ==================== 查询积分 ====================
+    async function loadCredit() {
+        const userId = document.getElementById('userId').value.trim();
+        const body = document.getElementById('creditBody');
+
+        if (!userId) { alert('请输入用户ID'); return; }
+
+        try {
+            const resp = await fetch(`${BASE}/api/user/credit?userId=${userId}`);
+            const data = await resp.json();
+
+            if (data.code === 0 && data.data) {
+                body.innerHTML = `
+                    <div class="credit-info">
+                        <div class="credit-item">
+                            <div class="label">累计积分</div>
+                            <div class="value">${data.data.totalCredit}</div>
+                        </div>
+                        <div class="credit-item">
+                            <div class="label">可用积分</div>
+                            <div class="value">${data.data.availableCredit}</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                body.innerHTML = '<div class="empty-tip">暂无积分记录</div>';
+            }
+        } catch (e) {
+            body.innerHTML = '<div class="empty-tip">查询失败</div>';
+        }
+    }
+
+    // ==================== 积分兑换 ====================
+    async function doExchange() {
+        const userId = document.getElementById('userId').value.trim();
+        const activityId = document.getElementById('activityId').value;
+        const cost = document.getElementById('exchangeCost').value;
+        const btn = document.getElementById('exchangeBtn');
+        const resultDiv = document.getElementById('exchangeResult');
+
+        if (!userId) { alert('请输入用户ID'); return; }
+        if (!cost || cost <= 0) { alert('请输入有效的积分数'); return; }
+
+        btn.disabled = true;
+        btn.textContent = '兑 换 中 ...';
+        resultDiv.className = 'result';
+
+        try {
+            const resp = await fetch(`${BASE}/api/user/credit-exchange?userId=${userId}&activityId=${activityId}&cost=${cost}`, {
+                method: 'POST'
+            });
+            const data = await resp.json();
+
+            if (data.code === 0) {
+                resultDiv.innerHTML = '<div class="award-name" style="font-size:18px;color:#2980b9;">兑换成功，获得 1 次抽奖机会</div>';
+                resultDiv.className = 'result success';
+                loadCredit(); // 自动刷新积分显示
+            } else {
+                resultDiv.innerHTML = `<div class="error-msg">${data.message}</div>`;
+                resultDiv.className = 'result error';
+            }
+        } catch (e) {
+            resultDiv.innerHTML = '<div class="error-msg">网络异常</div>';
+            resultDiv.className = 'result error';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '兑 换 抽 奖 机 会';
         }
     }
 </script>

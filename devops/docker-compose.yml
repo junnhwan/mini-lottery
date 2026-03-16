@@ -1,6 +1,6 @@
 services:
   mini-lottery:
-    build: .
+    image: mini-lottery
     container_name: mini-lottery
     # host 网络模式：容器直接使用宿主机网络
     # 这样容器内 localhost 就是宿主机，能直接访问 MySQL/Redis/RabbitMQ

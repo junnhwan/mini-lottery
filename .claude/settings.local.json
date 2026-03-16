@@ -10,7 +10,9 @@
       "Read(//c/Users/zjh/.m2/repository/com/google/**)",
       "Read(//c/Users/zjh/.m2/**)",
       "Bash(mvn test-compile -q)",
-      "Bash(mvn test -pl . -Dtest=io.wanjune.minilottery.service.UserBehaviorTest)"
+      "Bash(mvn test -pl . -Dtest=io.wanjune.minilottery.service.UserBehaviorTest)",
+      "Bash(mvn clean package -DskipTests -q)",
+      "Bash(docker build -t mini-lottery .)"
     ]
   }
 }
