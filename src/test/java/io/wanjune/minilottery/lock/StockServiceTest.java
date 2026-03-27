@@ -19,11 +19,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Phase 2 测试：DECR + SETNX 库存扣减
+ * Phase 2 测试：Redis + Lua 库存扣减
  *
  * 测试目标：
  * 1. 验证库存预热正确写入 Redis
- * 2. 验证 DECR 原子扣减基本流程
+ * 2. 验证 Lua 脚本原子扣减基本流程
  * 3. 验证 SETNX 分段锁生成
  * 4. 验证库存耗尽后返回失败
  * 5. 验证 rollbackStock（INCR）正确恢复
@@ -97,7 +97,7 @@ class StockServiceTest {
         log.info("预热幂等验证通过 ✓ 库存保持 73 未被覆盖");
     }
 
-    // ==================== DECR 扣减测试 ====================
+    // ==================== Lua 扣减测试 ====================
 
     @Test
     @DisplayName("deductStock：正常扣减成功")
@@ -111,7 +111,7 @@ class StockServiceTest {
         long surplus = redissonClient.getAtomicLong("stock:" + TEST_KEY).get();
         assertEquals(9, surplus, "扣减后库存应为 9");
 
-        log.info("DECR 扣减验证通过 ✓ surplus = {}", surplus);
+        log.info("Lua 扣减验证通过 ✓ surplus = {}", surplus);
     }
 
     @Test

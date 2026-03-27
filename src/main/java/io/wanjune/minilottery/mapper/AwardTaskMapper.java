@@ -4,6 +4,8 @@ import io.wanjune.minilottery.mapper.po.AwardTask;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.util.List;
+
 /**
  * 发奖任务 Mapper
  *
@@ -24,4 +26,9 @@ public interface AwardTaskMapper {
 
     /** 增加重试次数 */
     int incrementRetryCount(@Param("orderId") String orderId);
+
+    /** 查询可重试的失败发奖任务 */
+    List<AwardTask> queryRetryableFailedTasks(@Param("status") int status,
+                                              @Param("maxRetryCount") int maxRetryCount,
+                                              @Param("limit") int limit);
 }

@@ -90,9 +90,9 @@ public class LotteryServiceImpl implements LotteryService {
         log.info("用户资格校验通过 已参与{}次, 基础上限{}次, 额外机会{}次, 总上限{}次",
                 count, activity.getMaxPerUser(), bonusCount, totalAllowed);
 
-        // 4. Redis DECR 原子扣减库存（Phase 2 改造：Redisson 锁 → DECR + SETNX）
+        // 4. Redis Lua 脚本原子扣减库存（Phase 2 改造：Redisson 锁 → Lua 内 DECR + SETNX）
         //    改造前：Redisson tryLock → DB UPDATE → 释放锁（串行）
-        //    改造后：Redis DECR 原子扣减 → SETNX 分段锁 → MQ 异步落库 DB（无锁并行）
+        //    改造后：Lua 内原子执行 DECR + SETNX → MQ 异步落库 DB（无锁并行）
         boolean success = stockService.deductStock(activityId, activity.getEndTime());
         if (!success) {
             throw new BusinessException(1005, "库存不足或系统繁忙");

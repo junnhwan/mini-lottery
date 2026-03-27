@@ -9,7 +9,7 @@
 | Spring Boot 3.5 + Java 21 | 基础框架 |
 | MyBatis + MySQL | 持久层 |
 | Redis + Caffeine | 多级缓存（L1 本地 + L2 Redis + L3 DB） |
-| Redisson | 分布式锁基础设施 |
+| Redisson | Redis 原子计数、分段锁与库存预热 |
 | RabbitMQ | 异步发奖 + 延迟队列超时回滚 + 签到返利 |
 | Guava RateLimiter | 令牌桶限流 + 超频自动拉黑 |
 | Lombok | 减少样板代码 |
@@ -20,8 +20,8 @@
 ### 1. O(1) 哈希表抽奖算法
 概率装配至 Redis 哈希表，O(1) 随机查找。当概率精度 > 10000 时自适应切换 O(log n) 二分查找，平衡内存与性能。
 
-### 2. DECR + SETNX 库存扣减
-Redis DECR 原子扣减库存 + SETNX 分段锁防超卖，延迟队列异步落库实现 Redis 实时 + DB 最终一致。
+### 2. Redis + Lua 库存扣减
+Redis Lua 脚本内原子执行 `DECR + SETNX`，结合 MQ 异步落库与定时补偿，实现 Redis 实时库存 + DB 最终一致。
 
 ### 3. 责任链 + 规则树
 责任链前置过滤（黑名单 → 权重 → 默认）+ 规则树后置决策（锁 → 库存 → 兜底）。规则配置存 DB，支持热插拔。

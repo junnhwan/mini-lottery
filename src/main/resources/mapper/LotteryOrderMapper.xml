@@ -23,4 +23,14 @@
         UPDATE lottery_order SET status = #{status} WHERE order_id = #{orderId}
     </update>
 
+    <select id="queryStalePendingOrders" resultType="LotteryOrder">
+        SELECT *
+        FROM lottery_order
+        WHERE status = #{status}
+          AND create_time &lt;= #{beforeTime}
+          AND expire_time &gt; #{now}
+        ORDER BY create_time ASC, id ASC
+        LIMIT #{limit}
+    </select>
+
 </mapper>

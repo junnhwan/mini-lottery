@@ -20,4 +20,13 @@
         UPDATE award_task SET retry_count = retry_count + 1 WHERE order_id = #{orderId}
     </update>
 
+    <select id="queryRetryableFailedTasks" resultType="AwardTask">
+        SELECT *
+        FROM award_task
+        WHERE status = #{status}
+          AND retry_count &lt; #{maxRetryCount}
+        ORDER BY update_time ASC, id ASC
+        LIMIT #{limit}
+    </select>
+
 </mapper>

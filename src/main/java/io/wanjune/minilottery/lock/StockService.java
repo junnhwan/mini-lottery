@@ -5,31 +5,37 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RAtomicLong;
 import org.redisson.api.RedissonClient;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Collections;
 
 /**
- * 库存扣减服务 — DECR 原子扣减 + SETNX 分段锁
+ * 库存扣减服务 — Redis Lua 脚本原子扣减
  *
- * 对应简历：「基于 Redis DECR 原子指令扣减库存，结合 SETNX 分段锁机制防止库存恢复后重复消费，
- *           DB 乐观锁兜底防超卖，延迟队列异步落库实现最终一致性」
+ * 对应简历：「使用 Redis + Lua 脚本原子扣减库存，结合 SETNX 分段锁机制防止库存恢复后重复消费，
+ *           DB 乐观锁兜底防超卖，MQ 异步落库实现最终一致性」
  *
  * 改造前（Redisson 分布式锁方案）：
  *   tryLock → 读 DB 库存 → 判断 → DB 扣减 → 释放锁
  *   问题：所有请求串行通过锁，锁竞争激烈时大量请求等待超时
  *
- * 改造后（DECR + SETNX 方案）：
- *   DECR 原子扣减 Redis 库存 → SETNX 加分段锁 → 异步 MQ 落库 DB
- *   优势：DECR 是原子操作，不需要加锁，性能从"串行"变为"并行"
+ * 改造后（Lua 脚本方案）：
+ *   Lua 脚本内 DECR + SETNX 一次性原子执行 → 异步 MQ 落库 DB
+ *   优势：利用 Redis 单线程执行 Lua 的特性，DECR 和 SETNX 在同一脚本中原子完成，
+ *         无需加锁，无竞态条件，性能从"串行"变为"并行"
  *
- * 核心流程：
+ * Lua 脚本核心流程（stock_deduct.lua）：
  * 1. DECR stock:{activityId} → 原子扣减，返回扣减后的 surplus
- * 2. surplus < 0 → 库存已耗尽，重置为 0，返回失败
- * 3. surplus >= 0 → 扣减成功，SETNX stock:{activityId}_{surplus} 加分段锁
- * 4. SETNX 失败 → 说明这个库存单元已被消费过（运营恢复库存的场景），返回失败
- * 5. SETNX 成功 → 扣减成功，后续由 MQ 异步更新 DB
+ * 2. surplus < 0 → 库存已耗尽，重置为 0，返回 -1
+ * 3. surplus >= 0 → SETNX stock:{activityId}_{surplus} 加分段锁
+ * 4. SETNX 失败 → 返回 -2（库存单元已被消费过，运营恢复库存场景）
+ * 5. SETNX 成功 → 返回 surplus（成功），后续由 MQ 异步更新 DB
  *
  * 为什么需要 SETNX 分段锁？
  *   DECR 本身是原子的，正常不会超卖。但有个特殊场景：
@@ -46,18 +52,27 @@ import java.time.LocalDateTime;
 public class StockService {
 
     private final RedissonClient redissonClient;
+    private final StringRedisTemplate stringRedisTemplate;
     private final ActivityMapper activityMapper;
 
     /** Redis key 前缀：活动库存计数器 */
     private static final String STOCK_KEY_PREFIX = "stock:";
 
+    /** 加载 Lua 脚本（应用启动时解析一次，后续复用 SHA1 缓存） */
+    private static final RedisScript<Long> DEDUCT_STOCK_SCRIPT;
+
+    static {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("lua/stock_deduct.lua"));
+        script.setResultType(Long.class);
+        DEDUCT_STOCK_SCRIPT = script;
+    }
+
     /**
-     * DECR 原子扣减库存
+     * Lua 脚本原子扣减库存
      *
-     * 可以在这个方法打断点，观察：
-     * - surplus 的值（DECR 后的剩余库存）
-     * - lockKey 的格式（stock:{activityId}_{surplus}）
-     * - SETNX 的返回值（true=加锁成功，false=锁已存在）
+     * 整个 DECR + SETNX 在一个 Lua 脚本中执行，利用 Redis 单线程特性保证原子性。
+     * 相比之前的两步 Java 调用（先 DECR 再 SETNX），消除了两步之间的竞态窗口。
      *
      * @param activityId 活动ID
      * @param endTime    活动结束时间（用于计算分段锁的 TTL）
@@ -66,50 +81,34 @@ public class StockService {
     public boolean deductStock(String activityId, LocalDateTime endTime) {
         String stockKey = STOCK_KEY_PREFIX + activityId;
 
-        // ========== 第 1 步：DECR 原子扣减 ==========
-        // Redisson 的 RAtomicLong.decrementAndGet() 底层就是 Redis DECR 命令
-        // 原子操作：读取 → 减 1 → 写回，整个过程是不可中断的，不需要加锁
-        RAtomicLong atomicStock = redissonClient.getAtomicLong(stockKey);
-        long surplus = atomicStock.decrementAndGet();
-
-        // ========== 第 2 步：判断扣减结果 ==========
-        if (surplus < 0) {
-            // 库存已耗尽（被并发请求扣到负数）
-            // 重置为 0，防止无限递减
-            atomicStock.set(0);
-            log.warn("库存不足，DECR 后 surplus={}, 已重置为 0. activityId={}", surplus, activityId);
-            return false;
-        }
-
-        // ========== 第 3 步：SETNX 加分段锁 ==========
-        // lockKey 格式：stock:{activityId}_{surplus值}
-        // 例：库存从 100 扣到 99，lockKey = "stock:A20260310001_99"
-        // 每个库存数值对应一把唯一的锁
-        String lockKey = stockKey + "_" + surplus;
-
-        // TTL = 活动结束时间 - 当前时间 + 1天缓冲
-        // 为什么加 1 天？防止活动结束时间和锁过期时间之间的时钟误差
-        boolean locked;
+        // 计算分段锁 TTL（毫秒）
+        long ttlMs;
         if (endTime != null) {
-            long ttlMillis = Duration.between(LocalDateTime.now(), endTime).toMillis()
+            ttlMs = Duration.between(LocalDateTime.now(), endTime).toMillis()
                     + Duration.ofDays(1).toMillis();
-            locked = redissonClient.getBucket(lockKey).setIfAbsent("lock", Duration.ofMillis(ttlMillis));
         } else {
-            // 没有结束时间，设置较长的默认 TTL（7 天）防止永久占用
-            locked = redissonClient.getBucket(lockKey).setIfAbsent("lock", Duration.ofDays(7));
+            ttlMs = Duration.ofDays(7).toMillis();
         }
 
-        if (!locked) {
-            // SETNX 失败：说明这个库存单元已经被消费过
-            // 可能是运营恢复库存后的重复消费场景
-            log.warn("分段锁加锁失败（库存单元已被消费）lockKey={}", lockKey);
+        // 执行 Lua 脚本：DECR + SETNX 原子操作
+        Long result = stringRedisTemplate.execute(
+                DEDUCT_STOCK_SCRIPT,
+                Collections.singletonList(stockKey),
+                String.valueOf(ttlMs)
+        );
+
+        if (result == null || result == -1) {
+            log.warn("库存不足，Lua 脚本返回 {}. activityId={}", result, activityId);
+            return false;
+        }
+        if (result == -2) {
+            log.warn("分段锁加锁失败（库存单元已被消费）activityId={}", activityId);
             return false;
         }
 
-        log.info("库存扣减成功 activityId={}, surplus={}, lockKey={}", activityId, surplus, lockKey);
+        log.info("库存扣减成功 activityId={}, surplus={}", activityId, result);
 
-        // surplus == 0 说明最后一个库存被扣走，可以通知清零
-        if (surplus == 0) {
+        if (result == 0) {
             log.info("库存已清零 activityId={}", activityId);
         }
 
