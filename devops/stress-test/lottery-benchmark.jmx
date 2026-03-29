@@ -18,6 +18,8 @@
           </elementProp>
         </collectionProp>
       </elementProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
     </TestPlan>
     <hashTree>
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="场景1：基准QPS测试（50并发）" enabled="false">
@@ -70,7 +72,7 @@
         </ResponseAssertion>
         <hashTree/>
       </hashTree>
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="场景2：限流效果测试（同一用户高频）">
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="场景2：限流效果测试（同一用户高频）" enabled="false">
         <intProp name="ThreadGroup.num_threads">20</intProp>
         <intProp name="ThreadGroup.ramp_time">1</intProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
@@ -81,7 +83,7 @@
         </elementProp>
       </ThreadGroup>
       <hashTree>
-        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="限流测试请求">
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="限流测试请求" enabled="true">
           <stringProp name="HTTPSampler.domain">${SERVER_HOST}</stringProp>
           <stringProp name="HTTPSampler.port">${SERVER_PORT}</stringProp>
           <stringProp name="HTTPSampler.protocol">http</stringProp>
@@ -109,7 +111,7 @@
           </elementProp>
         </HTTPSamplerProxy>
         <hashTree/>
-        <JSONPathAssertion guiclass="JSONPathAssertionGui" testclass="JSONPathAssertion" testname="检查返回有code字段">
+        <JSONPathAssertion guiclass="JSONPathAssertionGui" testclass="JSONPathAssertion" testname="检查返回有code字段" enabled="true">
           <stringProp name="JSON_PATH">$.code</stringProp>
           <boolProp name="JSONVALIDATION">false</boolProp>
           <boolProp name="EXPECT_NULL">false</boolProp>
@@ -119,7 +121,7 @@
         </JSONPathAssertion>
         <hashTree/>
       </hashTree>
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="场景3：库存扣减压测（100并发抢1000库存）" enabled="false">
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="场景3：库存扣减压测（100并发抢1000库存）">
         <intProp name="ThreadGroup.num_threads">100</intProp>
         <intProp name="ThreadGroup.ramp_time">3</intProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>

@@ -2,7 +2,16 @@ services:
   mini-lottery:
     image: mini-lottery
     container_name: mini-lottery
-    # host 网络模式：容器直接使用宿主机网络
-    # 这样容器内 localhost 就是宿主机，能直接访问 MySQL/Redis/RabbitMQ
     network_mode: host
     restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3306/mini_lottery?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+      SPRING_DATASOURCE_USERNAME: lottery
+      SPRING_DATASOURCE_PASSWORD: Lottery@123456
+      SPRING_DATA_REDIS_HOST: 127.0.0.1
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: 123456
+      SPRING_RABBITMQ_HOST: 127.0.0.1
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: admin
+      SPRING_RABBITMQ_PASSWORD: 123456
